@@ -7,6 +7,9 @@ private let log = Logger(subsystem: "dev.sugrob", category: "menu")
 /// Status bar item with all user controls. Labels are in Russian.
 @MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
+    /// «Настройки…».
+    var onOpenSettings: (() -> Void)?
+
     private let settings: Settings
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
@@ -117,6 +120,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         aboutItem.target = self
         menu.addItem(aboutItem)
 
+        let settingsItem = NSMenuItem(title: "Настройки…", action: #selector(openSettings(_:)), keyEquivalent: ",")
+        settingsItem.keyEquivalentModifierMask = [.command]
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+
         let quitItem = NSMenuItem(title: "Выйти", action: #selector(quit(_:)), keyEquivalent: "q")
         quitItem.keyEquivalentModifierMask = [.command]
         quitItem.target = self
@@ -218,6 +226,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             "occlusionVisible": window.map { $0.occlusionState.contains(.visible) } ?? false,
             "screen": window?.screen?.localizedName ?? "",
         ]
+    }
+
+    @objc private func openSettings(_ sender: NSMenuItem) {
+        onOpenSettings?()
     }
 
     @objc private func showAbout(_ sender: NSMenuItem) {
