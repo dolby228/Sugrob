@@ -168,7 +168,25 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         footer.orientation = .horizontal
         footer.spacing = 8
 
-        let stack = NSStackView(views: [messageLabel, grid, separator(), footer])
+        let hotKeysTitle = NSTextField(labelWithString: "Горячие клавиши")
+        hotKeysTitle.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+        let hotKeysGrid = NSGridView(views: HotKeys.Action.allCases.map { action -> [NSView] in
+            [NSTextField(labelWithString: action.shortcut), NSTextField(labelWithString: action.title)]
+        })
+        hotKeysGrid.rowSpacing = 4
+        hotKeysGrid.columnSpacing = 12
+        let hotKeysNote = NSTextField(
+            wrappingLabelWithString: "Работают в любом приложении. Повторный запуск Sugrob.app тоже открывает это окно."
+        )
+        hotKeysNote.textColor = .secondaryLabelColor
+        hotKeysNote.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        hotKeysNote.preferredMaxLayoutWidth = 420
+        let hotKeysSection = NSStackView(views: [hotKeysTitle, hotKeysGrid, hotKeysNote])
+        hotKeysSection.orientation = .vertical
+        hotKeysSection.alignment = .leading
+        hotKeysSection.spacing = 6
+
+        let stack = NSStackView(views: [messageLabel, grid, separator(), hotKeysSection, separator(), footer])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 16

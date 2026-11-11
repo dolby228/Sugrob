@@ -4,7 +4,7 @@ import os
 private let log = Logger(subsystem: "dev.sugrob", category: "app")
 
 /// Ways to control Sugrob besides the status item, which can be hidden by the notch:
-/// the settings window (on reopen, on first launch, from the menu).
+/// the settings window (on reopen, on first launch, from the menu) and global hotkeys.
 @MainActor
 final class FallbackControls {
     static let welcomeMessage =
@@ -15,6 +15,7 @@ final class FallbackControls {
     private let settings: Settings
     private let menuBar: MenuBarController
     private let defaults: UserDefaults
+    private var hotKeys: HotKeys?
     private lazy var settingsWindow: SettingsWindowController = {
         let controller = SettingsWindowController(settings: settings)
         controller.onCopyDiagnostics = { [weak self] in
@@ -33,6 +34,12 @@ final class FallbackControls {
     }
 
     func start() {
+        let hotKeys = HotKeys { [weak self] action in
+            self?.perform(action)
+        }
+        hotKeys.register()
+        self.hotKeys = hotKeys
+
         if !defaults.bool(forKey: Self.didShowWelcomeKey) {
             defaults.set(true, forKey: Self.didShowWelcomeKey)
             log.info("first launch, showing welcome")
@@ -40,9 +47,25 @@ final class FallbackControls {
         }
     }
 
-    func stop() {}
+    func stop() {
+        hotKeys?.unregister()
+        hotKeys = nil
+    }
 
     func showSettings(message: String? = nil) {
         settingsWindow.show(message: message)
+    }
+
+    private func perform(_ action: HotKeys.Action) {
+        switch action {
+        case .togglePause:
+            settings.isPaused.toggle()
+        case .openSettings:
+            showSettings()
+        case .clearAll:
+            NotificationCenter.default.post(name: .sugrobClearAll, object: nil)
+        case .quit:
+            NSApp.terminate(nil)
+        }
     }
 }
