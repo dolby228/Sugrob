@@ -8,10 +8,10 @@ private let log = Logger(subsystem: "dev.sugrob", category: "app")
 @MainActor
 final class FallbackControls {
     static let welcomeMessage =
-        "Снежинка в строке меню — управление. Если её не видно (закрыта вырезом экрана), откройте Sugrob ещё раз или нажмите ⌥⌘,"
+        "Снежинка в строке меню — управление. Если её не видно (закрыта вырезом экрана), откройте Sugrob ещё раз или нажмите ⌃⌥⌘,"
 
     static let hiddenStatusItemMessage =
-        "Значок Sugrob не виден в строке меню: скорее всего, его закрыл вырез экрана. Управлять снегом можно здесь. Открыть это окно снова: запустите Sugrob ещё раз или нажмите ⌥⌘,"
+        "Значок Sugrob не виден в строке меню: скорее всего, его закрыл вырез экрана. Управлять снегом можно здесь. Открыть это окно снова: запустите Sugrob ещё раз или нажмите ⌃⌥⌘,"
 
     private static let didShowWelcomeKey = "didShowWelcome"
 

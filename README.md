@@ -12,7 +12,7 @@ Landing with a live demo: https://dolby228.github.io/Sugrob/
 
 A snowflake appears in the menu bar. There is no Dock icon. On the first launch a settings window opens once.
 
-If the snowflake is not visible (on a MacBook with a notch a full menu bar hides it under the notch), open Sugrob.app again or press ⌥⌘, to bring up the settings window. Sugrob also opens it by itself when it detects that the menu bar icon is hidden. ⌘-drag the icon to move it; the position is remembered.
+If the snowflake is not visible (on a MacBook with a notch a full menu bar hides it under the notch), open Sugrob.app again or press ⌃⌥⌘, to bring up the settings window. Sugrob also opens it by itself when it detects that the menu bar icon is hidden. ⌘-drag the icon to move it; the position is remembered.
 
 Requirements: macOS 13 or newer, Apple Silicon or Intel.
 
@@ -20,18 +20,18 @@ Requirements: macOS 13 or newer, Apple Silicon or Intel.
 
 | What | How |
 | --- | --- |
-| Pause / resume | Menu bar → **Пауза**, or ⌥⌘S |
+| Pause / resume | Menu bar → **Пауза**, or ⌃⌥⌘S |
 | Snowfall | **Снегопад**: Лёгкий, Ровный, Метель |
 | Wind | **Ветер**: calm or one of four directions |
 | Mitten | **Инструмент → Варежка**, then move the cursor through a drift to sweep it |
 | Shovel | **Инструмент → Лопата**, drag along a drift to scoop, release to throw the load as one clump |
 | Snowball | Hold ⌥ and drag along a drift, release to throw. Three stacked balls become a snowman |
-| Clear everything | **Очистить сугробы**, or ⌥⌘K |
+| Clear everything | **Очистить сугробы**, or ⌃⌥⌘K |
 | Start at login | **Запускать при входе** |
-| Settings window | **Настройки…**, ⌥⌘, or open Sugrob.app again while it runs |
-| Quit | **Выйти**, **Выйти из Sugrob** in the settings window, or ⌥⌘Q |
+| Settings window | **Настройки…**, ⌃⌥⌘, or open Sugrob.app again while it runs |
+| Quit | **Выйти**, **Выйти из Sugrob** in the settings window, or ⌃⌥⌘Q |
 
-Hotkeys ⌥⌘S, ⌥⌘,, ⌥⌘K and ⌥⌘Q work in any app and need no permissions (Carbon `RegisterEventHotKey`). If another app already owns one of them, it is skipped and logged.
+Hotkeys ⌃⌥⌘S, ⌃⌥⌘,, ⌃⌥⌘K and ⌃⌥⌘Q work in any app and need no permissions (Carbon `RegisterEventHotKey`). If another app already owns one of them, it is skipped and logged.
 
 Global mouse monitors only observe events, they never swallow them: the app under the cursor still receives the same click or drag.
 

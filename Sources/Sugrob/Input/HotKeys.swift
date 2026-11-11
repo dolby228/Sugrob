@@ -23,15 +23,15 @@ final class HotKeys {
             }
         }
 
-        /// All hotkeys use ⌥⌘.
-        static let modifiers = UInt32(cmdKey | optionKey)
+        /// All hotkeys use ⌃⌥⌘: a combo apps rarely bind, so we do not steal theirs.
+        static let modifiers = UInt32(cmdKey | optionKey | controlKey)
 
         var shortcut: String {
             switch self {
-            case .togglePause: return "⌥⌘S"
-            case .openSettings: return "⌥⌘,"
-            case .clearAll: return "⌥⌘K"
-            case .quit: return "⌥⌘Q"
+            case .togglePause: return "⌃⌥⌘S"
+            case .openSettings: return "⌃⌥⌘,"
+            case .clearAll: return "⌃⌥⌘K"
+            case .quit: return "⌃⌥⌘Q"
             }
         }
 
