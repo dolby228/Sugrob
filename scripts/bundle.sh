@@ -14,6 +14,24 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/Sugrob" "$APP/Contents/MacOS/Sugrob"
 
+# App icon: drawn by scripts/make-icon.swift, packed with iconutil.
+ICON_WORK="$(mktemp -d)"
+trap 'rm -rf "$ICON_WORK"' EXIT
+ICONSET="$ICON_WORK/AppIcon.iconset"
+if ! swift scripts/make-icon.swift "$ICONSET"; then
+    echo "error: icon generation failed (scripts/make-icon.swift)" >&2
+    exit 1
+fi
+if ! iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"; then
+    echo "error: iconutil could not build AppIcon.icns" >&2
+    exit 1
+fi
+if [[ ! -s "$APP/Contents/Resources/AppIcon.icns" ]]; then
+    echo "error: AppIcon.icns is missing or empty" >&2
+    exit 1
+fi
+echo "Generated icon: $(stat -f%z "$APP/Contents/Resources/AppIcon.icns") bytes"
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -23,6 +41,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleDisplayName</key><string>Sugrob</string>
     <key>CFBundleIdentifier</key><string>dev.sugrob.app</string>
     <key>CFBundleExecutable</key><string>Sugrob</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>${VERSION}</string>
     <key>CFBundleVersion</key><string>${VERSION}</string>

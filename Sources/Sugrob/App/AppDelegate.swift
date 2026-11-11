@@ -8,6 +8,7 @@ private let log = Logger(subsystem: "dev.sugrob", category: "app")
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settings: Settings?
     private var menuBar: MenuBarController?
+    private var controls: FallbackControls?
     private var tracker: WindowTracker?
     private var overlay: OverlayController?
     private var power: PowerMonitor?
@@ -40,7 +41,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let tracker = WindowTracker()
         self.tracker = tracker
 
-        menuBar = MenuBarController(settings: settings)
+        let menuBar = MenuBarController(settings: settings)
+        self.menuBar = menuBar
+        controls = FallbackControls(settings: settings, menuBar: menuBar)
 
         let mouse = MouseInput(settings: settings) { [weak self] in
             self?.snowWorlds() ?? []
@@ -67,9 +70,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tracker.start()
         pushSurfaces()
         mouse.start()
+        controls?.start()
+    }
+
+    /// Opening Sugrob.app again while it runs: the status item may be hidden by the notch.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        controls?.showSettings()
+        return false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        controls?.stop()
         mouse?.stop()
         tracker?.stop()
         overlay?.stop()
