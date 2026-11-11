@@ -11,6 +11,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var tracker: WindowTracker?
     private var overlay: OverlayController?
 
+    /// `main.swift` top-level code is nonisolated, so the delegate must be creatable there.
+    /// Everything else happens in `applicationDidFinishLaunching` on the main actor.
+    nonisolated override init() {
+        super.init()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         log.info("Sugrob \(SnowCore.version, privacy: .public) started")
 
