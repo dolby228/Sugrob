@@ -72,7 +72,7 @@ final class WorldSettingsBinder: NSObject {
             applyPreset()
         case .windX, .windY:
             applyWind()
-        case .isPaused, .tool, .showDebugOutlines:
+        case .isPaused, .tool, .showDebugOutlines, .showInDock:
             break
         }
     }

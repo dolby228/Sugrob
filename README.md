@@ -10,9 +10,9 @@ Landing with a live demo: https://dolby228.github.io/Sugrob/
 2. Unzip and move `Sugrob.app` to `/Applications`.
 3. The app is signed ad-hoc, not notarized: open it with right click → **Open** the first time.
 
-A snowflake appears in the menu bar. There is no Dock icon. On the first launch a settings window opens once.
+A snowflake appears in the menu bar and Sugrob shows up in the Dock: clicking the Dock icon opens the settings window, right click gives pause, clear and settings. The Dock icon can be turned off in settings («Показывать иконку в Dock»). On the first launch a settings window opens once.
 
-If the snowflake is not visible (on a MacBook with a notch a full menu bar hides it under the notch), open Sugrob.app again or press ⌃⌥⌘, to bring up the settings window. Sugrob also opens it by itself when it detects that the menu bar icon is hidden. ⌘-drag the icon to move it; the position is remembered.
+If the snowflake is not visible (on a MacBook with a notch a full menu bar hides it under the notch), click the Dock icon, open Sugrob.app again or press ⌃⌥⌘, to bring up the settings window. Sugrob also opens it by itself when it detects that the menu bar icon is hidden. ⌘-drag the icon to move it; the position is remembered.
 
 Requirements: macOS 13 or newer, Apple Silicon or Intel.
 
