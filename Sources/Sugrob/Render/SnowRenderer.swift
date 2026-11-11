@@ -22,6 +22,37 @@ struct DriftVertex {
     var t: Float
 }
 
+/// One instanced shape of the snowball/snowman/shovel pass. 48 bytes, like the shader struct.
+struct ShapeInstance {
+    enum Kind: Float {
+        case ball = 0
+        case disc = 1
+        case triangle = 2
+        case bar = 3
+        case blob = 4
+    }
+
+    var center: SIMD2<Float>
+    /// Half extents in points.
+    var size: SIMD2<Float>
+    /// Straight (not premultiplied) RGBA.
+    var color: SIMD4<Float>
+    var rotation: Float
+    var kind: Float
+    var seed: Float
+    var pad: Float
+
+    init(kind: Kind, center: SIMD2<Float>, size: SIMD2<Float>, color: SIMD4<Float> = SIMD4(1, 1, 1, 1), rotation: Float = 0, seed: Float = 0) {
+        self.center = center
+        self.size = size
+        self.color = color
+        self.rotation = rotation
+        self.kind = kind.rawValue
+        self.seed = seed
+        self.pad = 0
+    }
+}
+
 struct RenderUniforms {
     var viewportSize: SIMD2<Float>
 }
@@ -50,6 +81,7 @@ final class RenderPipelines {
     let flakePipeline: MTLRenderPipelineState
     let driftPipeline: MTLRenderPipelineState
     let occluderPipeline: MTLRenderPipelineState
+    let shapePipeline: MTLRenderPipelineState
     /// Occluders keep the smallest surface index covering each pixel.
     let occluderStencil: MTLDepthStencilState
     /// A drift is drawn only where no surface in front of it was stamped.
@@ -108,6 +140,13 @@ final class RenderPipelines {
             vertex: try function(ShaderSource.driftVertex),
             fragment: try function(ShaderSource.occluderFragment),
             writesColor: false
+        )
+        shapePipeline = try Self.makePipeline(
+            device: device,
+            label: "shapes",
+            vertex: try function(ShaderSource.shapeVertex),
+            fragment: try function(ShaderSource.shapeFragment),
+            writesColor: true
         )
 
         guard
@@ -183,6 +222,10 @@ final class RenderPipelines {
 /// stencil buffer: every surface stamps its rect with `index + 1` (keeping the minimum),
 /// and a drift with reference `index + 1` only passes where the stamp is not smaller.
 ///
+/// Snowballs, snowmen, dumped clumps and the shovel are instanced shapes drawn after the
+/// drifts. Those standing on a surface use that surface's stencil reference, so a window
+/// in front hides them like it hides the drift; flying ones are drawn over everything.
+///
 /// Buffers are triple-buffered behind a semaphore and grow on demand, so steady-state
 /// frames allocate nothing.
 @MainActor
@@ -204,11 +247,23 @@ final class SnowRenderer {
     private var frameIndex = 0
     private var flakeBuffers: [MTLBuffer?] = Array(repeating: nil, count: SnowRenderer.maxFramesInFlight)
     private var driftBuffers: [MTLBuffer?] = Array(repeating: nil, count: SnowRenderer.maxFramesInFlight)
+    private var shapeBuffers: [MTLBuffer?] = Array(repeating: nil, count: SnowRenderer.maxFramesInFlight)
     private var stencilTexture: MTLTexture?
 
     private var displayHeights: [Float] = []
     private var occluderDraws: [DrawRange] = []
     private var driftDraws: [DrawRange] = []
+    private var shapeDraws: [DrawRange] = []
+
+    private struct PendingShape {
+        var reference: UInt32
+        var sequence: Int
+        var instance: ShapeInstance
+    }
+
+    private var pendingShapes: [PendingShape] = []
+    /// Back-most surface index that has a shape standing on it, or -1.
+    private var backmostShapeSurface = -1
 
     init(pipelines: RenderPipelines) {
         self.pipelines = pipelines
@@ -226,6 +281,7 @@ final class SnowRenderer {
 
         frameIndex = (frameIndex + 1) % Self.maxFramesInFlight
         let flakeCount = fillFlakes(world.flakes)
+        let shapeBuffer = fillShapes(world)
         let driftBuffer = fillDrifts(world)
 
         guard
@@ -248,7 +304,7 @@ final class SnowRenderer {
         var uniforms = RenderUniforms(viewportSize: viewport)
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<RenderUniforms>.stride, index: 1)
 
-        if let driftBuffer, !driftDraws.isEmpty {
+        if let driftBuffer {
             encoder.setVertexBuffer(driftBuffer, offset: 0, index: 0)
 
             encoder.setRenderPipelineState(pipelines.occluderPipeline)
@@ -263,6 +319,18 @@ final class SnowRenderer {
             for draw in driftDraws {
                 encoder.setStencilReferenceValue(draw.reference)
                 encoder.drawPrimitives(type: .triangle, vertexStart: draw.start, vertexCount: draw.count)
+            }
+        }
+
+        if let shapeBuffer, !shapeDraws.isEmpty {
+            encoder.setRenderPipelineState(pipelines.shapePipeline)
+            encoder.setDepthStencilState(pipelines.driftStencil)
+            encoder.setVertexBuffer(shapeBuffer, offset: 0, index: 0)
+            let stride = MemoryLayout<ShapeInstance>.stride
+            for draw in shapeDraws {
+                encoder.setVertexBufferOffset(draw.start * stride, index: 0)
+                encoder.setStencilReferenceValue(draw.reference)
+                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: draw.count)
             }
         }
 
@@ -352,6 +420,142 @@ final class SnowRenderer {
         return count
     }
 
+    // MARK: Shapes
+
+    private static let coal = SIMD4<Float>(0.10, 0.10, 0.12, 1)
+    private static let carrot = SIMD4<Float>(0.98, 0.50, 0.10, 1)
+    private static let scarf = SIMD4<Float>(0.86, 0.13, 0.16, 1)
+    private static let scarfShade = SIMD4<Float>(0.72, 0.09, 0.12, 1)
+    private static let blade = SIMD4<Float>(0.56, 0.61, 0.69, 0.95)
+    private static let handle = SIMD4<Float>(0.55, 0.37, 0.21, 0.95)
+
+    /// Stencil reference of the surface an object stands on; 0 (always visible) if none.
+    private func reference(for surfaceID: Int?, in world: SnowWorld) -> UInt32 {
+        guard let surfaceID, let k = world.surfaceOrder.firstIndex(of: surfaceID) else { return 0 }
+        guard k < Self.maxOrderedSurfaces else { return 255 }
+        backmostShapeSurface = max(backmostShapeSurface, k)
+        return UInt32(k + 1)
+    }
+
+    private func addShape(_ instance: ShapeInstance, reference: UInt32) {
+        pendingShapes.append(PendingShape(reference: reference, sequence: pendingShapes.count, instance: instance))
+    }
+
+    /// Builds the shape instances, grouped by stencil reference (back surfaces first,
+    /// flying objects last). Returns the buffer or nil when there is nothing to draw.
+    private func fillShapes(_ world: SnowWorld) -> MTLBuffer? {
+        pendingShapes.removeAll(keepingCapacity: true)
+        shapeDraws.removeAll(keepingCapacity: true)
+        backmostShapeSurface = -1
+
+        for ball in world.snowballs {
+            let attached = ball.state == .resting || ball.state == .rolling
+            let ref = attached ? reference(for: ball.surfaceID, in: world) : 0
+            addShape(ShapeInstance(kind: .ball, center: ball.center, size: SIMD2(repeating: ball.radius)), reference: ref)
+        }
+        for man in world.snowmen {
+            addSnowman(man, reference: reference(for: man.surfaceID, in: world))
+        }
+        for clump in world.clumps {
+            let r = clump.radius
+            addShape(ShapeInstance(
+                kind: .blob,
+                center: clump.center,
+                size: SIMD2(r, r * 0.85),
+                rotation: clump.rotation,
+                seed: Float(clump.id % 13)
+            ), reference: 0)
+        }
+        if let position = world.shovelPosition {
+            addShovel(at: position, load: world.shovelLoad)
+        }
+
+        let count = pendingShapes.count
+        guard count > 0 else { return nil }
+        pendingShapes.sort { a, b in
+            a.reference != b.reference ? a.reference > b.reference : a.sequence < b.sequence
+        }
+
+        let stride = MemoryLayout<ShapeInstance>.stride
+        guard let buffer = ensureBuffer(in: &shapeBuffers, bytes: count * stride, label: "shapes") else { return nil }
+        let out = buffer.contents().bindMemory(to: ShapeInstance.self, capacity: count)
+        for i in 0..<count {
+            let shape = pendingShapes[i]
+            out[i] = shape.instance
+            if let last = shapeDraws.last, last.reference == shape.reference {
+                shapeDraws[shapeDraws.count - 1].count += 1
+            } else {
+                shapeDraws.append(DrawRange(start: i, count: 1, reference: shape.reference))
+            }
+        }
+        return buffer
+    }
+
+    /// Three balls, coal buttons and eyes, a carrot pointing sideways and a red scarf.
+    private func addSnowman(_ man: Snowman, reference ref: UInt32) {
+        let f: Float = man.facing < 0 ? -1 : 1
+        let bottom = man.bottomCenter
+        let middle = man.middleCenter
+        let head = man.headCenter
+        let r1 = man.middleRadius
+        let r2 = man.headRadius
+
+        addShape(ShapeInstance(kind: .ball, center: bottom, size: SIMD2(repeating: man.bottomRadius)), reference: ref)
+        addShape(ShapeInstance(kind: .ball, center: middle, size: SIMD2(repeating: r1)), reference: ref)
+
+        let button = SIMD2<Float>(repeating: max(1, r1 * 0.09))
+        addShape(ShapeInstance(kind: .disc, center: middle + SIMD2(f * r1 * 0.12, -r1 * 0.12), size: button, color: Self.coal), reference: ref)
+        addShape(ShapeInstance(kind: .disc, center: middle + SIMD2(f * r1 * 0.15, r1 * 0.28), size: button, color: Self.coal), reference: ref)
+
+        addShape(ShapeInstance(kind: .ball, center: head, size: SIMD2(repeating: r2)), reference: ref)
+
+        // Scarf: a band round the neck and a tail hanging on the back.
+        let neckY = head.y + r2 * 0.82
+        addShape(ShapeInstance(
+            kind: .bar,
+            center: SIMD2(head.x, neckY),
+            size: SIMD2(r2 * 0.95, max(1.4, r2 * 0.2)),
+            color: Self.scarf,
+            rotation: 0.05 * f
+        ), reference: ref)
+        addShape(ShapeInstance(
+            kind: .bar,
+            center: SIMD2(head.x - f * r2 * 0.45, neckY + r2 * 0.45),
+            size: SIMD2(max(1.2, r2 * 0.17), r2 * 0.42),
+            color: Self.scarfShade,
+            rotation: 0.25 * f
+        ), reference: ref)
+
+        let eye = SIMD2<Float>(repeating: max(1.1, r2 * 0.11))
+        let eyeY = head.y - r2 * 0.2
+        let eyeX = head.x + f * r2 * 0.14
+        addShape(ShapeInstance(kind: .disc, center: SIMD2(eyeX - r2 * 0.27, eyeY), size: eye, color: Self.coal), reference: ref)
+        addShape(ShapeInstance(kind: .disc, center: SIMD2(eyeX + r2 * 0.27, eyeY), size: eye, color: Self.coal), reference: ref)
+
+        let halfLength = max(2.5, r2 * 0.42)
+        addShape(ShapeInstance(
+            kind: .triangle,
+            center: SIMD2(head.x + f * (r2 * 0.35 + halfLength), head.y + r2 * 0.02),
+            size: SIMD2(halfLength, max(1.5, r2 * 0.14)),
+            color: Self.carrot,
+            rotation: f > 0 ? 0.12 : Float.pi - 0.12
+        ), reference: ref)
+    }
+
+    /// Blade under the cursor with a short handle; the carried heap rides on the blade.
+    private func addShovel(at p: SIMD2<Float>, load: Float) {
+        let bladeHalf = SnowWorld.shovelHalfWidth * 0.75
+        addShape(ShapeInstance(kind: .bar, center: p + SIMD2(9, -9), size: SIMD2(1.4, 10), color: Self.handle, rotation: 0.6), reference: 0)
+        guard load > 0 else {
+            addShape(ShapeInstance(kind: .bar, center: p + SIMD2(0, 6), size: SIMD2(bladeHalf, 2), color: Self.blade), reference: 0)
+            return
+        }
+        let rx = max(5, min(bladeHalf * 1.6, (load / Float.pi).squareRoot() * 1.15))
+        let ry = rx * 0.6
+        addShape(ShapeInstance(kind: .bar, center: p + SIMD2(0, 6), size: SIMD2(max(bladeHalf, rx * 0.9), 2), color: Self.blade), reference: 0)
+        addShape(ShapeInstance(kind: .blob, center: p + SIMD2(0, 4 - ry * 0.55), size: SIMD2(rx, ry), seed: 3), reference: 0)
+    }
+
     // MARK: Drifts
 
     /// Writes occluder quads and drift triangles; returns the buffer or nil when nothing to draw.
@@ -368,16 +572,18 @@ final class SnowRenderer {
             backmostSnowy = k
             maxVertices += (drift.columnCount - 1) * 12
         }
-        guard backmostSnowy >= 0 else { return nil }
-        // Only surfaces in front of the back-most snowy one can hide anything.
-        maxVertices += backmostSnowy * 6
+        // Only surfaces in front of the back-most snowy (or snowman-carrying) one can hide anything.
+        let backmost = max(backmostSnowy, min(backmostShapeSurface, limit - 1))
+        guard backmost >= 0 else { return nil }
+        maxVertices += backmost * 6
+        guard maxVertices > 0 else { return nil }
 
         let vertexStride = MemoryLayout<DriftVertex>.stride
         guard let buffer = ensureBuffer(in: &driftBuffers, bytes: maxVertices * vertexStride, label: "drifts") else { return nil }
         let out = buffer.contents().bindMemory(to: DriftVertex.self, capacity: maxVertices)
         var cursor = 0
 
-        for k in 0..<backmostSnowy {
+        for k in 0..<backmost {
             guard let rect = world.surfaces[order[k]]?.rect else { continue }
             let start = cursor
             let a = DriftVertex(position: SIMD2(rect.minX, rect.minY), dist: 0, t: 0)
@@ -405,7 +611,7 @@ final class SnowRenderer {
             }
         }
 
-        return driftDraws.isEmpty ? nil : buffer
+        return driftDraws.isEmpty && occluderDraws.isEmpty ? nil : buffer
     }
 
     /// Smooths the simulated height map a little, adds lumps and rounds the ends,
