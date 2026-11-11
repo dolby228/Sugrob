@@ -13,7 +13,7 @@ jobs:
   build:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Toolchain
         run: swift --version
@@ -30,7 +30,7 @@ jobs:
       - name: Zip app
         run: ditto -c -k --keepParent dist/Sugrob.app dist/Sugrob.zip
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: Sugrob-app
           path: dist/Sugrob.zip
