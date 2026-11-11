@@ -13,6 +13,7 @@ final class SnowView: MTKView, OverlayContent {
     let world: SnowWorld
 
     private let renderer: SnowRenderer
+    private var binder: WorldSettingsBinder?
     private var lastFrameTime: CFTimeInterval?
     private var lastSurfaces: [TrackedSurface] = []
     private var lastScreen: NSScreen?
@@ -23,7 +24,7 @@ final class SnowView: MTKView, OverlayContent {
     /// Longest simulated step; a stalled frame must not teleport flakes through drifts.
     static let maxStep: CFTimeInterval = 1.0 / 20.0
 
-    init(frame frameRect: NSRect, pipelines: RenderPipelines) {
+    init(frame frameRect: NSRect, pipelines: RenderPipelines, settings: Settings) {
         world = SnowWorld(bounds: Rect(
             x: 0,
             y: 0,
@@ -42,6 +43,8 @@ final class SnowView: MTKView, OverlayContent {
         preferredFramesPerSecond = framesPerSecond
         isPaused = false
         configureLayer()
+
+        binder = WorldSettingsBinder(settings: settings, view: self)
     }
 
     required init(coder: NSCoder) {
