@@ -36,6 +36,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let toolHint = NSTextField(wrappingLabelWithString: "")
     private let debugCheckbox = NSButton(checkboxWithTitle: "Показывать контуры окон", target: nil, action: nil)
     private let loginCheckbox = NSButton(checkboxWithTitle: "Запускать при входе", target: nil, action: nil)
+    private let dockCheckbox = NSButton(checkboxWithTitle: "Показывать иконку в Dock", target: nil, action: nil)
     private let copiedLabel = NSTextField(labelWithString: "")
 
     private static let toolHints: [Settings.Tool: String] = [
@@ -126,6 +127,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         debugCheckbox.action = #selector(debugChanged(_:))
         loginCheckbox.target = self
         loginCheckbox.action = #selector(loginChanged(_:))
+        dockCheckbox.target = self
+        dockCheckbox.action = #selector(dockChanged(_:))
 
         for (index, preset) in Settings.windPresets.enumerated() {
             windControl.setToolTip(preset.title, forSegment: index)
@@ -146,6 +149,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             [NSGridCell.emptyContentView, clearButton],
             [label("Прочее:"), debugCheckbox],
             [NSGridCell.emptyContentView, loginCheckbox],
+            [NSGridCell.emptyContentView, dockCheckbox],
         ])
         grid.rowSpacing = 10
         grid.columnSpacing = 8
@@ -246,6 +250,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         debugCheckbox.toolTip = forced ? "Включено через SUGROB_DEBUG_WINDOWS=1" : nil
 
         loginCheckbox.state = LaunchAtLogin.isEnabled ? .on : .off
+        dockCheckbox.state = settings.showInDock ? .on : .off
     }
 
     // MARK: Actions
@@ -280,6 +285,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func loginChanged(_ sender: NSButton) {
         LaunchAtLogin.toggle()
+    }
+
+    @objc private func dockChanged(_ sender: NSButton) {
+        settings.showInDock = sender.state == .on
     }
 
     @objc private func launchAtLoginChanged(_ notification: Notification) {
