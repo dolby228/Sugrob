@@ -1,5 +1,4 @@
 import AppKit
-import ServiceManagement
 import SnowCore
 import os
 
@@ -8,32 +7,6 @@ private let log = Logger(subsystem: "dev.sugrob", category: "menu")
 /// Status bar item with all user controls. Labels are in Russian.
 @MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
-    private struct WindPreset {
-        let title: String
-        let x: Double
-        let y: Double
-    }
-
-    /// Wind is in screen-local y-down space, so «Вверх» is negative y.
-    private static let windPresets: [WindPreset] = [
-        WindPreset(title: "Штиль", x: 0, y: 0),
-        WindPreset(title: "← Влево", x: -0.6, y: 0),
-        WindPreset(title: "→ Вправо", x: 0.6, y: 0),
-        WindPreset(title: "↑ Вверх", x: 0, y: -0.6),
-        WindPreset(title: "↓ Вниз", x: 0, y: 0.6),
-    ]
-
-    private static let snowfallTitles: [(Settings.Snowfall, String)] = [
-        (.light, "Лёгкий"),
-        (.steady, "Ровный"),
-        (.blizzard, "Метель"),
-    ]
-
-    private static let toolTitles: [(Settings.Tool, String)] = [
-        (.mitten, "Варежка"),
-        (.shovel, "Лопата"),
-    ]
-
     private let settings: Settings
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
@@ -83,7 +56,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
 
         let snowfallMenu = NSMenu()
-        for (index, entry) in Self.snowfallTitles.enumerated() {
+        for (index, entry) in Settings.snowfallTitles.enumerated() {
             let item = NSMenuItem(title: entry.1, action: #selector(selectSnowfall(_:)), keyEquivalent: "")
             item.target = self
             item.tag = index
@@ -93,7 +66,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(submenuItem(title: "Снегопад", submenu: snowfallMenu))
 
         let windMenu = NSMenu()
-        for (index, preset) in Self.windPresets.enumerated() {
+        for (index, preset) in Settings.windPresets.enumerated() {
             let item = NSMenuItem(title: preset.title, action: #selector(selectWind(_:)), keyEquivalent: "")
             item.target = self
             item.tag = index
@@ -103,7 +76,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(submenuItem(title: "Ветер", submenu: windMenu))
 
         let toolMenu = NSMenu()
-        for (index, entry) in Self.toolTitles.enumerated() {
+        for (index, entry) in Settings.toolTitles.enumerated() {
             let item = NSMenuItem(title: entry.1, action: #selector(selectTool(_:)), keyEquivalent: "")
             item.target = self
             item.tag = index
@@ -111,7 +84,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             toolItems.append(item)
         }
         toolMenu.addItem(.separator())
-        let snowballHint = NSMenuItem(title: "⌥ + перетаскивание по сугробу — снежок", action: nil, keyEquivalent: "")
+        let snowballHint = NSMenuItem(title: Settings.snowballHint, action: nil, keyEquivalent: "")
         snowballHint.isEnabled = false
         toolMenu.addItem(snowballHint)
         menu.addItem(submenuItem(title: "Инструмент", submenu: toolMenu))
@@ -160,19 +133,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         pauseItem.title = settings.isPaused ? "Продолжить" : "Пауза"
 
         let snowfall = settings.snowfall
-        for (item, entry) in zip(snowfallItems, Self.snowfallTitles) {
+        for (item, entry) in zip(snowfallItems, Settings.snowfallTitles) {
             item.state = entry.0 == snowfall ? .on : .off
         }
 
         let windX = settings.windX
         let windY = settings.windY
-        for (item, preset) in zip(windItems, Self.windPresets) {
-            let matches = abs(preset.x - windX) < 0.001 && abs(preset.y - windY) < 0.001
-            item.state = matches ? .on : .off
+        for (item, preset) in zip(windItems, Settings.windPresets) {
+            item.state = preset.matches(x: windX, y: windY) ? .on : .off
         }
 
         let tool = settings.tool
-        for (item, entry) in zip(toolItems, Self.toolTitles) {
+        for (item, entry) in zip(toolItems, Settings.toolTitles) {
             item.state = entry.0 == tool ? .on : .off
         }
 
@@ -181,7 +153,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         debugItem.isEnabled = !forced
         debugItem.toolTip = forced ? "Включено через SUGROB_DEBUG_WINDOWS=1" : nil
 
-        loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        loginItem.state = LaunchAtLogin.isEnabled ? .on : .off
     }
 
     // MARK: Actions
@@ -191,19 +163,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func selectSnowfall(_ sender: NSMenuItem) {
-        guard Self.snowfallTitles.indices.contains(sender.tag) else { return }
-        settings.snowfall = Self.snowfallTitles[sender.tag].0
+        guard Settings.snowfallTitles.indices.contains(sender.tag) else { return }
+        settings.snowfall = Settings.snowfallTitles[sender.tag].0
     }
 
     @objc private func selectWind(_ sender: NSMenuItem) {
-        guard Self.windPresets.indices.contains(sender.tag) else { return }
-        let preset = Self.windPresets[sender.tag]
+        guard Settings.windPresets.indices.contains(sender.tag) else { return }
+        let preset = Settings.windPresets[sender.tag]
         settings.setWind(x: preset.x, y: preset.y)
     }
 
     @objc private func selectTool(_ sender: NSMenuItem) {
-        guard Self.toolTitles.indices.contains(sender.tag) else { return }
-        settings.tool = Self.toolTitles[sender.tag].0
+        guard Settings.toolTitles.indices.contains(sender.tag) else { return }
+        settings.tool = Settings.toolTitles[sender.tag].0
     }
 
     @objc private func clearAll(_ sender: NSMenuItem) {
@@ -215,18 +187,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func toggleLaunchAtLogin(_ sender: NSMenuItem) {
-        let service = SMAppService.mainApp
-        do {
-            if service.status == .enabled {
-                try service.unregister()
-                log.debug("unregistered login item")
-            } else {
-                try service.register()
-                log.debug("registered login item, status \(String(describing: service.status), privacy: .public)")
-            }
-        } catch {
-            log.error("login item toggle failed: \(error.localizedDescription, privacy: .public)")
-        }
+        LaunchAtLogin.toggle()
         refreshStates()
     }
 
