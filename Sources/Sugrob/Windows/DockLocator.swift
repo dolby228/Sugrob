@@ -74,6 +74,8 @@ final class DockLocator {
     private var loggedDockWindows: [WindowListEntry] = []
     private var loggedSources: [Int: Source] = [:]
     private var loggedFullScreen: [Int: FullScreenReason] = [:]
+    /// The last result, for «Скопировать диагностику».
+    private var lastFrames: [Int: CGRect] = [:]
 
     /// Dock frames for every screen where the Dock is shown. `list` is the raw window list,
     /// `windows` the ordinary (layer 0) windows front to back.
@@ -86,6 +88,7 @@ final class DockLocator {
         var result = Result()
         if preferences?.autohide == true {
             logSources([:])
+            lastFrames = [:]
             return result
         }
         var sources: [Int: Source] = [:]
@@ -164,6 +167,7 @@ final class DockLocator {
         }
 
         logSources(sources)
+        lastFrames = result.frames
         return result
     }
 
@@ -231,6 +235,47 @@ final class DockLocator {
             log.debug("dock \(id) left the full-screen space")
         }
         loggedFullScreen = fullScreen
+    }
+
+    /// What the last `locate` saw and decided, for «Скопировать диагностику». Keys of
+    /// `screens` are `WindowTracker.dockSurfaceID(for:)`; frames there are screen-local
+    /// y-down, the raw AX frames CG global.
+    var diagnostics: [String: Any] {
+        func orNull(_ value: Any?) -> Any { value ?? NSNull() }
+        var screens: [String: Any] = [:]
+        for screen in NSScreen.screens {
+            let id = WindowTracker.dockSurfaceID(for: screen)
+            var entry: [String: Any] = ["name": screen.localizedName]
+            entry["source"] = orNull(loggedSources[id]?.rawValue)
+            entry["frame"] = Diagnostics.rect(lastFrames[id])
+            entry["fullScreen"] = orNull(loggedFullScreen[id]?.rawValue)
+            if let reserved = Self.reservedStrip(for: screen) {
+                let (strip, edge) = reserved
+                entry["strip"] = Diagnostics.rect(strip)
+                entry["edge"] = String(describing: edge)
+                if let tiles = accessibilityTiles {
+                    let frame = Self.accessibilityFrame(
+                        tiles,
+                        screenFrame: screen.frame,
+                        primaryHeight: Coordinates.primaryScreenHeight,
+                        strip: strip,
+                        edge: edge
+                    )
+                    entry["accessibilityFrame"] = Diagnostics.rect(frame)
+                }
+            }
+            screens[String(id)] = entry
+        }
+        let lists: [Any] = accessibilityTiles?.lists.map { Diagnostics.rect($0) } ?? []
+        let items: [Any] = accessibilityTiles?.items.map { Diagnostics.rect($0) } ?? []
+        return [
+            "screens": screens,
+            "dockPID": orNull(dockPID.map { Int($0) }),
+            "accessibilityTrusted": AXIsProcessTrusted(),
+            "accessibilityLists": lists,
+            "accessibilityItems": items,
+            "estimate": orNull(preferences?.diagnostics),
+        ]
     }
 
     private func logSources(_ sources: [Int: Source]) {

@@ -9,18 +9,19 @@ private let log = Logger(subsystem: "dev.sugrob", category: "app")
 /// «Скопировать диагностику»: a JSON report for bug reports.
 ///
 /// Contains screens, on-screen window bounds (owner, pid, layer, bounds, alpha; never
-/// window titles), the Accessibility trust flag, settings and the status item frame.
+/// window titles), the Accessibility trust flag, how the Dock was located (source,
+/// AX frames, estimate inputs), settings and the status item frame.
 @MainActor
 enum Diagnostics {
-    static func copyToPasteboard(settings: Settings, statusItem: [String: Any]) {
-        let text = report(settings: settings, statusItem: statusItem)
+    static func copyToPasteboard(settings: Settings, statusItem: [String: Any], dock: [String: Any]?) {
+        let text = report(settings: settings, statusItem: statusItem, dock: dock)
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         log.info("copied diagnostics, \(text.count) characters")
     }
 
-    static func report(settings: Settings, statusItem: [String: Any]) -> String {
+    static func report(settings: Settings, statusItem: [String: Any], dock: [String: Any]?) -> String {
         let info = Bundle.main.infoDictionary ?? [:]
         let root: [String: Any] = [
             "appVersion": info["CFBundleShortVersionString"] as? String ?? SnowCore.version,
@@ -30,6 +31,7 @@ enum Diagnostics {
             "screens": NSScreen.screens.enumerated().map { screenInfo(index: $0.offset, screen: $0.element) },
             "windows": windowInfo(),
             "dockPreferences": orNull(DockPreferences.read()?.description),
+            "dock": orNull(dock),
             "settings": settingsInfo(settings),
             "statusItem": statusItem,
         ]

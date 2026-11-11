@@ -12,6 +12,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// Called at most once per launch when the status item turns out not to be visible.
     /// The argument is a short reason for the log.
     var onStatusItemHidden: ((String) -> Void)?
+    /// How the Dock was located, for «Скопировать диагностику».
+    var dockDiagnostics: (() -> [String: Any])?
 
     private var reportedHidden = false
     private var visibilityCheck: DispatchWorkItem?
@@ -311,7 +313,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     func copyDiagnostics() {
-        Diagnostics.copyToPasteboard(settings: settings, statusItem: statusItemDiagnostics())
+        Diagnostics.copyToPasteboard(
+            settings: settings,
+            statusItem: statusItemDiagnostics(),
+            dock: dockDiagnostics?()
+        )
     }
 
     /// Status item geometry for «Скопировать диагностику».
