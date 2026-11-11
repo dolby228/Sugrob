@@ -288,12 +288,13 @@ kbd {
   .site-nav {
     order: 3;
     width: 100%;
-    margin: 4px 0 0 -12px;
+    margin: 4px 0 0 -8px;
   }
 
   .site-nav a {
     font-size: 14px;
-    padding: 6px 12px;
+    padding: 6px 8px;
+    white-space: nowrap;
   }
 
   html {
@@ -339,7 +340,7 @@ kbd {
 }
 
 .hero h1 {
-  max-width: 14ch;
+  max-width: 18ch;
   margin-inline: auto;
   font-size: clamp(40px, 8vw, 80px);
   font-weight: 800;
@@ -491,6 +492,7 @@ section {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  text-align: center;
 }
 
 .segmented label {
