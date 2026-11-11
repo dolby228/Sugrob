@@ -10,6 +10,19 @@ struct TrackedWindow: Equatable, Sendable {
     let frame: CGRect
 }
 
+/// One raw entry of `CGWindowListCopyWindowInfo`, before any filtering.
+struct WindowListEntry: Equatable, Sendable {
+    let id: CGWindowID
+    let layer: Int
+    let ownerPID: pid_t
+    let ownerName: String
+    /// Window title; only present when the app may record the screen.
+    let name: String?
+    let alpha: Double
+    /// CG global coordinates.
+    let bounds: CGRect
+}
+
 /// Change of a tracked window between two polls.
 enum WindowEvent: Equatable, Sendable {
     case added(TrackedWindow)
@@ -23,9 +36,11 @@ struct TrackedSurface: Equatable, Sendable {
     enum Kind: Equatable, Sendable {
         case window
         case dock
+        /// A system panel above all windows: never carries snow, only hides what is behind it.
+        case occluder
     }
 
-    /// Window surfaces use their `CGWindowID`; the Dock uses a negative synthetic id.
+    /// Window and occluder surfaces use their `CGWindowID`; the Dock uses a negative synthetic id.
     let id: Int
     /// Screen-local coordinates: origin top-left of the screen, y grows down (SnowCore space).
     let frame: CGRect

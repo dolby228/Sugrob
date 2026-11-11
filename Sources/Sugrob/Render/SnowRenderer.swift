@@ -219,8 +219,10 @@ final class RenderPipelines {
 /// Per frame: flakes become instances of a soft sprite; each drift becomes a triangle
 /// list (body + thin feather strip above the top edge for anti-aliasing). Drifts of
 /// windows further back are hidden where a window in front covers them, using the
-/// stencil buffer: every surface stamps its rect with `index + 1` (keeping the minimum),
-/// and a drift with reference `index + 1` only passes where the stamp is not smaller.
+/// stencil buffer: every surface stamps its rect with `index + 2` (keeping the minimum),
+/// and a drift with reference `index + 2` only passes where the stamp is not smaller.
+/// Reference 1 belongs to system panels (`occluders`), which are in front of every
+/// surface and hide all drifts and standing objects behind them.
 ///
 /// Snowballs, snowmen, dumped clumps and the shovel are instanced shapes drawn after the
 /// drifts. Those standing on a surface use that surface's stencil reference, so a window
@@ -231,8 +233,11 @@ final class RenderPipelines {
 @MainActor
 final class SnowRenderer {
     static let maxFramesInFlight = 3
-    /// Stencil is 8 bit and 255 is the clear value, so this many surfaces can be ordered.
-    static let maxOrderedSurfaces = 254
+    /// Stencil is 8 bit, 255 is the clear value and 1 is taken by occluders,
+    /// so this many surfaces can be ordered.
+    static let maxOrderedSurfaces = 253
+    /// Stencil stamp of system panels; smaller than every surface reference.
+    static let occluderReference: UInt32 = 1
     /// Height of the anti-aliasing strip above the top edge, in points.
     static let feather: Float = 1.5
     /// Curve points per column gap when the bank outline is subdivided.
@@ -245,6 +250,10 @@ final class SnowRenderer {
         var count: Int
         var reference: UInt32
     }
+
+    /// Screen-local y-down rects of system panels in front of every surface. They carry no
+    /// snow; they only stamp the stencil so nothing standing behind them shows through.
+    var occluders: [Rect] = []
 
     private let pipelines: RenderPipelines
     private let inFlight = DispatchSemaphore(value: SnowRenderer.maxFramesInFlight)
@@ -458,7 +467,7 @@ final class SnowRenderer {
         guard let surfaceID, let k = world.surfaceOrder.firstIndex(of: surfaceID) else { return 0 }
         guard k < Self.maxOrderedSurfaces else { return 255 }
         backmostShapeSurface = max(backmostShapeSurface, k)
-        return UInt32(k + 1)
+        return Self.surfaceReference(k)
     }
 
     private func addShape(_ instance: ShapeInstance, reference: UInt32) {
@@ -599,13 +608,19 @@ final class SnowRenderer {
         // Only surfaces in front of the back-most snowy (or snowman-carrying) one can hide anything.
         let backmost = max(backmostSnowy, min(backmostShapeSurface, limit - 1))
         guard backmost >= 0 else { return nil }
-        maxVertices += backmost * 6
+        maxVertices += (backmost + occluders.count) * 6
         guard maxVertices > 0 else { return nil }
 
         let vertexStride = MemoryLayout<DriftVertex>.stride
         guard let buffer = ensureBuffer(in: &driftBuffers, bytes: maxVertices * vertexStride, label: "drifts") else { return nil }
         let out = buffer.contents().bindMemory(to: DriftVertex.self, capacity: maxVertices)
         var cursor = 0
+
+        for rect in occluders {
+            let start = cursor
+            cursor = Self.writeQuad(rect, to: out, at: cursor)
+            occluderDraws.append(DrawRange(start: start, count: 6, reference: Self.occluderReference))
+        }
 
         for k in 0..<backmost {
             guard let rect = world.surfaces[order[k]]?.rect else { continue }
@@ -621,7 +636,7 @@ final class SnowRenderer {
             out[cursor + 4] = d
             out[cursor + 5] = c
             cursor += 6
-            occluderDraws.append(DrawRange(start: start, count: 6, reference: UInt32(k + 1)))
+            occluderDraws.append(DrawRange(start: start, count: 6, reference: Self.surfaceReference(k)))
         }
 
         // Back to front so a bank in front blends over one behind it.
@@ -631,11 +646,31 @@ final class SnowRenderer {
             let start = cursor
             cursor = writeDrift(drift, rect: rect, seed: Float(abs(id) % 97), to: out, from: cursor)
             if cursor > start {
-                driftDraws.append(DrawRange(start: start, count: cursor - start, reference: UInt32(k + 1)))
+                driftDraws.append(DrawRange(start: start, count: cursor - start, reference: Self.surfaceReference(k)))
             }
         }
 
         return driftDraws.isEmpty && occluderDraws.isEmpty ? nil : buffer
+    }
+
+    /// Stencil reference of the surface at front-to-back index `k`.
+    private static func surfaceReference(_ k: Int) -> UInt32 {
+        UInt32(k + 2)
+    }
+
+    /// Two triangles covering `rect`; returns the cursor after them.
+    private static func writeQuad(_ rect: Rect, to out: UnsafeMutablePointer<DriftVertex>, at cursor: Int) -> Int {
+        let a = DriftVertex(position: SIMD2(rect.minX, rect.minY), dist: 0, t: 0)
+        let b = DriftVertex(position: SIMD2(rect.maxX, rect.minY), dist: 0, t: 0)
+        let c = DriftVertex(position: SIMD2(rect.minX, rect.maxY), dist: 0, t: 0)
+        let d = DriftVertex(position: SIMD2(rect.maxX, rect.maxY), dist: 0, t: 0)
+        out[cursor] = a
+        out[cursor + 1] = b
+        out[cursor + 2] = c
+        out[cursor + 3] = b
+        out[cursor + 4] = d
+        out[cursor + 5] = c
+        return cursor + 6
     }
 
     /// Softens the simulated height map with a gaussian, adds gentle long-wavelength

@@ -7,10 +7,15 @@ protocol OverlayContent: NSView {
     func update(surfaces: [TrackedSurface], screen: NSScreen)
     /// Pause hides the snow; the window tracker keeps running.
     func setPaused(_ paused: Bool)
+    /// A full-screen system panel (Launchpad / Apps, Mission Control) covers the screen.
+    func setCovered(_ covered: Bool)
 }
 
 extension OverlayContent {
     func setPaused(_ paused: Bool) {
         isHidden = paused
     }
+
+    /// The outline view keeps drawing; only the snow is hidden.
+    func setCovered(_ covered: Bool) {}
 }

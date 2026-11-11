@@ -155,6 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let overlay, let tracker else { return }
         for entry in overlay.contents {
             entry.content.update(surfaces: tracker.surfaces(for: entry.screen), screen: entry.screen)
+            entry.content.setCovered(tracker.isCoveredByPanel(entry.screen))
         }
     }
 }

@@ -8,6 +8,9 @@ private let log = Logger(subsystem: "dev.sugrob", category: "tracker")
 /// Uses `CGWindowListCopyWindowInfo`, which needs no permissions for window bounds.
 /// Only ordinary app windows are kept: layer 0, visible (alpha > 0), larger than 40x40
 /// and not owned by this process (our own overlay windows must never collect snow).
+/// Windows above layer 0 but below the overlay (system panels, Spotlight, banners,
+/// floating palettes) are kept separately as occluders: they never carry snow but hide
+/// any drift behind them.
 @MainActor
 final class WindowTracker: NSObject {
     /// Called on the main thread after a poll that changed anything: the window list
@@ -21,9 +24,23 @@ final class WindowTracker: NSObject {
     static let minimumSize = CGSize(width: 40, height: 40)
     /// Insets smaller than this (e.g. the sliver left by an auto-hidden Dock) are ignored.
     static let minimumDockInset: CGFloat = 8
+    /// Layer of our overlay (`.statusBar`); windows at or above it are drawn over the snow anyway.
+    static let overlayLayer = Int(CGWindowLevelForKey(.statusWindow))
+    /// Owners of the menu bar and its extras, which never occlude drifts.
+    static let ignoredOccluderOwners: Set<String> = ["Window Server", "SystemUIServer", "Control Center"]
+    /// A window covering at least this share of a screen is a backdrop, not an occluder.
+    static let fullScreenCoverage: CGFloat = 0.9
+    /// Owners whose near full-screen panels (Launchpad / Apps, Mission Control, Spotlight)
+    /// hide all snow on that screen. The Dock itself is matched by pid as well.
+    static let coveringPanelOwners: Set<String> = [DockLocator.ownerName, "Spotlight"]
 
     private var timer: Timer?
     private var dockFrames: [Int: CGRect] = [:]
+    /// System panels in front of all ordinary windows, front to back, CG global.
+    private var occluders: [TrackedWindow] = []
+    /// Displays hidden behind a full-screen system panel.
+    private var coveredDisplays: Set<CGDirectDisplayID> = []
+    private let dockLocator = DockLocator()
     private let ownPID = getpid()
 
     init(interval: TimeInterval = 0.1) {
@@ -62,22 +79,41 @@ final class WindowTracker: NSObject {
 
     /// Reads the window list once and fires `onUpdate` if something changed.
     func poll() {
-        let current = Self.readWindows(excludingPID: ownPID)
+        let list = Self.readWindowList()
+        let current = Self.ordinaryWindows(in: list, excludingPID: ownPID)
         let events = Self.diff(old: windows, new: current)
         let orderChanged = events.isEmpty && current.map(\.id) != windows.map(\.id)
 
-        let docks = currentDockFrames()
+        let dock = dockLocator.locate(in: list, windows: current)
+        let docks = dock.frames
         let docksChanged = docks != dockFrames
 
-        guard !events.isEmpty || orderChanged || docksChanged else { return }
+        let panels = findOccluders(in: list, dockWindowIDs: dock.windowIDs)
+        let panelsChanged = panels != occluders
+
+        let covered = findCoveredDisplays(in: list)
+        let coveredChanged = covered != coveredDisplays
+
+        guard !events.isEmpty || orderChanged || docksChanged || panelsChanged || coveredChanged else { return }
 
         windows = current
         dockFrames = docks
+        occluders = panels
+        coveredDisplays = covered
         for event in events {
             Self.logEvent(event)
         }
         if docksChanged {
             log.debug("dock areas changed: \(String(describing: docks), privacy: .public)")
+        }
+        if panelsChanged {
+            let summary = panels.map { "\($0.id) \($0.ownerName) \(String(describing: $0.frame))" }
+                .joined(separator: ", ")
+            log.debug("occluders: \(summary, privacy: .public)")
+        }
+        if coveredChanged {
+            let ids = covered.map { String($0) }.sorted().joined(separator: ", ")
+            log.debug("displays covered by a system panel: [\(ids, privacy: .public)]")
         }
         onUpdate?(current, events)
     }
@@ -85,7 +121,7 @@ final class WindowTracker: NSObject {
     // MARK: Surfaces
 
     /// Surfaces visible on `screen`, front to back, in that screen's local y-down space.
-    /// The Dock comes first because it is drawn above all normal windows.
+    /// Occluders come first, then the Dock, because both are drawn above all normal windows.
     /// Window frames are not clipped to the screen; the consumer clips if needed.
     func surfaces(for screen: NSScreen) -> [TrackedSurface] {
         let primaryHeight = Coordinates.primaryScreenHeight
@@ -93,8 +129,17 @@ final class WindowTracker: NSObject {
         let screenCG = Coordinates.cgRect(fromCocoa: screenFrame, primaryHeight: primaryHeight)
 
         var result: [TrackedSurface] = []
-        if let dock = Self.dockSurface(for: screen) {
-            result.append(dock)
+        for panel in occluders where panel.frame.intersects(screenCG) {
+            let local = Coordinates.screenLocal(
+                fromCG: panel.frame,
+                screenFrame: screenFrame,
+                primaryHeight: primaryHeight
+            )
+            result.append(TrackedSurface(id: Int(panel.id), frame: local, kind: .occluder))
+        }
+        let dockID = Self.dockSurfaceID(for: screen)
+        if let dock = dockFrames[dockID] {
+            result.append(TrackedSurface(id: dockID, frame: dock, kind: .dock))
         }
         for window in windows where window.frame.intersects(screenCG) {
             let local = Coordinates.screenLocal(
@@ -112,70 +157,108 @@ final class WindowTracker: NSObject {
         -(Int(screen.displayID ?? 0) + 1)
     }
 
-    /// The Dock area derived from `screen.frame` vs `screen.visibleFrame`:
-    /// a bottom inset means a bottom Dock, a left/right inset a side Dock.
-    /// The top inset is the menu bar and is ignored.
-    /// Note: this is the whole reserved strip, not the exact Dock tile bounds.
-    static func dockSurface(for screen: NSScreen) -> TrackedSurface? {
-        let frame = screen.frame
-        let visible = screen.visibleFrame
-        let bottom = visible.minY - frame.minY
-        let left = visible.minX - frame.minX
-        let right = frame.maxX - visible.maxX
+    // MARK: Occluders
 
-        // Screen-local y-down rects.
-        let local: CGRect
-        if bottom >= minimumDockInset {
-            local = CGRect(x: 0, y: frame.height - bottom, width: frame.width, height: bottom)
-        } else if left >= minimumDockInset {
-            let top = frame.maxY - visible.maxY
-            local = CGRect(x: 0, y: top, width: left, height: visible.height)
-        } else if right >= minimumDockInset {
-            let top = frame.maxY - visible.maxY
-            local = CGRect(x: frame.width - right, y: top, width: right, height: visible.height)
-        } else {
-            return nil
+    /// Visible windows above layer 0 and below the overlay, front to back, except ours,
+    /// the menu bar, the Dock tile window and full-screen backdrops.
+    private func findOccluders(in list: [WindowListEntry], dockWindowIDs: Set<CGWindowID>) -> [TrackedWindow] {
+        let primaryHeight = Coordinates.primaryScreenHeight
+        let screens = NSScreen.screens.map { Coordinates.cgRect(fromCocoa: $0.frame, primaryHeight: primaryHeight) }
+
+        var result: [TrackedWindow] = []
+        for entry in list {
+            guard
+                entry.layer > 0, entry.layer < Self.overlayLayer,
+                entry.ownerPID != ownPID, entry.alpha > 0,
+                entry.bounds.width > Self.minimumSize.width, entry.bounds.height > Self.minimumSize.height,
+                !Self.ignoredOccluderOwners.contains(entry.ownerName),
+                !dockWindowIDs.contains(entry.id)
+            else { continue }
+            if screens.contains(where: { Self.coverage(of: entry.bounds, on: $0) >= Self.fullScreenCoverage }) {
+                continue
+            }
+            result.append(TrackedWindow(id: entry.id, ownerName: entry.ownerName, ownerPID: entry.ownerPID, frame: entry.bounds))
         }
-        return TrackedSurface(id: dockSurfaceID(for: screen), frame: local, kind: .dock)
+        return result
     }
 
-    private func currentDockFrames() -> [Int: CGRect] {
-        var result: [Int: CGRect] = [:]
-        for screen in NSScreen.screens {
-            if let dock = Self.dockSurface(for: screen) {
-                result[dock.id] = dock.frame
+    /// True while a full-screen system panel (Launchpad / Apps, Mission Control, Spotlight)
+    /// covers `screen`; the snow there should be hidden.
+    func isCoveredByPanel(_ screen: NSScreen) -> Bool {
+        guard let id = screen.displayID else { return false }
+        return coveredDisplays.contains(id)
+    }
+
+    /// Displays at least 90% covered by a visible Dock or Spotlight window above layer 0.
+    /// The Dock's own Dock-level windows are skipped: one of them is a permanent,
+    /// transparent full-screen window.
+    private func findCoveredDisplays(in list: [WindowListEntry]) -> Set<CGDirectDisplayID> {
+        let primaryHeight = Coordinates.primaryScreenHeight
+        var result: Set<CGDirectDisplayID> = []
+        for entry in list {
+            guard entry.layer > 0, entry.layer < Self.overlayLayer, entry.alpha > 0 else { continue }
+            let isDock = dockLocator.isDockOwned(entry)
+            guard isDock || Self.coveringPanelOwners.contains(entry.ownerName) else { continue }
+            if isDock && entry.layer == DockLocator.dockLevel { continue }
+            for screen in NSScreen.screens {
+                guard let id = screen.displayID else { continue }
+                let screenCG = Coordinates.cgRect(fromCocoa: screen.frame, primaryHeight: primaryHeight)
+                if Self.coverage(of: entry.bounds, on: screenCG) >= Self.fullScreenCoverage {
+                    result.insert(id)
+                }
             }
         }
         return result
     }
 
+    /// Share of `screen` covered by `rect` (both in the same space), 0...1.
+    static func coverage(of rect: CGRect, on screen: CGRect) -> CGFloat {
+        let overlap = rect.intersection(screen)
+        guard !overlap.isNull, screen.width > 0, screen.height > 0 else { return 0 }
+        return (overlap.width * overlap.height) / (screen.width * screen.height)
+    }
+
     // MARK: Window list
 
-    /// Front-to-back list of ordinary windows, in the order the window server returns them.
-    static func readWindows(excludingPID ownPID: pid_t) -> [TrackedWindow] {
+    /// Every on-screen window of every layer, front to back, as the window server returns them.
+    static func readWindowList() -> [WindowListEntry] {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
             log.debug("CGWindowListCopyWindowInfo returned nil")
             return []
         }
 
-        var result: [TrackedWindow] = []
+        var result: [WindowListEntry] = []
         result.reserveCapacity(list.count)
         for info in list {
             guard
-                let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue, layer == 0,
+                let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue,
                 let number = (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
-                let pid = (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value, pid != ownPID,
+                let pid = (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
                 let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
                 let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
             else { continue }
 
-            let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1
-            guard alpha > 0 else { continue }
-            guard bounds.width > minimumSize.width, bounds.height > minimumSize.height else { continue }
+            result.append(WindowListEntry(
+                id: number,
+                layer: layer,
+                ownerPID: pid,
+                ownerName: info[kCGWindowOwnerName as String] as? String ?? "",
+                name: info[kCGWindowName as String] as? String,
+                alpha: (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1,
+                bounds: bounds
+            ))
+        }
+        return result
+    }
 
-            let owner = info[kCGWindowOwnerName as String] as? String ?? ""
-            result.append(TrackedWindow(id: number, ownerName: owner, ownerPID: pid, frame: bounds))
+    /// Ordinary app windows (layer 0, visible, not tiny, not ours), front to back.
+    static func ordinaryWindows(in list: [WindowListEntry], excludingPID ownPID: pid_t) -> [TrackedWindow] {
+        var result: [TrackedWindow] = []
+        for entry in list {
+            guard entry.layer == 0, entry.ownerPID != ownPID, entry.alpha > 0 else { continue }
+            guard entry.bounds.width > minimumSize.width, entry.bounds.height > minimumSize.height else { continue }
+            result.append(TrackedWindow(id: entry.id, ownerName: entry.ownerName, ownerPID: entry.ownerPID, frame: entry.bounds))
         }
         return result
     }
