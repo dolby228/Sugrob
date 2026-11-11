@@ -24,6 +24,7 @@ final class WindowTracker: NSObject {
 
     private var timer: Timer?
     private var dockFrames: [Int: CGRect] = [:]
+    private let dockLocator = DockLocator()
     private let ownPID = getpid()
 
     init(interval: TimeInterval = 0.1) {
@@ -62,11 +63,12 @@ final class WindowTracker: NSObject {
 
     /// Reads the window list once and fires `onUpdate` if something changed.
     func poll() {
-        let current = Self.readWindows(excludingPID: ownPID)
+        let list = Self.readWindowList()
+        let current = Self.ordinaryWindows(in: list, excludingPID: ownPID)
         let events = Self.diff(old: windows, new: current)
         let orderChanged = events.isEmpty && current.map(\.id) != windows.map(\.id)
 
-        let docks = currentDockFrames()
+        let docks = dockLocator.locate(in: list).frames
         let docksChanged = docks != dockFrames
 
         guard !events.isEmpty || orderChanged || docksChanged else { return }
@@ -93,8 +95,9 @@ final class WindowTracker: NSObject {
         let screenCG = Coordinates.cgRect(fromCocoa: screenFrame, primaryHeight: primaryHeight)
 
         var result: [TrackedSurface] = []
-        if let dock = Self.dockSurface(for: screen) {
-            result.append(dock)
+        let dockID = Self.dockSurfaceID(for: screen)
+        if let dock = dockFrames[dockID] {
+            result.append(TrackedSurface(id: dockID, frame: dock, kind: .dock))
         }
         for window in windows where window.frame.intersects(screenCG) {
             let local = Coordinates.screenLocal(
@@ -112,70 +115,47 @@ final class WindowTracker: NSObject {
         -(Int(screen.displayID ?? 0) + 1)
     }
 
-    /// The Dock area derived from `screen.frame` vs `screen.visibleFrame`:
-    /// a bottom inset means a bottom Dock, a left/right inset a side Dock.
-    /// The top inset is the menu bar and is ignored.
-    /// Note: this is the whole reserved strip, not the exact Dock tile bounds.
-    static func dockSurface(for screen: NSScreen) -> TrackedSurface? {
-        let frame = screen.frame
-        let visible = screen.visibleFrame
-        let bottom = visible.minY - frame.minY
-        let left = visible.minX - frame.minX
-        let right = frame.maxX - visible.maxX
-
-        // Screen-local y-down rects.
-        let local: CGRect
-        if bottom >= minimumDockInset {
-            local = CGRect(x: 0, y: frame.height - bottom, width: frame.width, height: bottom)
-        } else if left >= minimumDockInset {
-            let top = frame.maxY - visible.maxY
-            local = CGRect(x: 0, y: top, width: left, height: visible.height)
-        } else if right >= minimumDockInset {
-            let top = frame.maxY - visible.maxY
-            local = CGRect(x: frame.width - right, y: top, width: right, height: visible.height)
-        } else {
-            return nil
-        }
-        return TrackedSurface(id: dockSurfaceID(for: screen), frame: local, kind: .dock)
-    }
-
-    private func currentDockFrames() -> [Int: CGRect] {
-        var result: [Int: CGRect] = [:]
-        for screen in NSScreen.screens {
-            if let dock = Self.dockSurface(for: screen) {
-                result[dock.id] = dock.frame
-            }
-        }
-        return result
-    }
-
     // MARK: Window list
 
-    /// Front-to-back list of ordinary windows, in the order the window server returns them.
-    static func readWindows(excludingPID ownPID: pid_t) -> [TrackedWindow] {
+    /// Every on-screen window of every layer, front to back, as the window server returns them.
+    static func readWindowList() -> [WindowListEntry] {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
             log.debug("CGWindowListCopyWindowInfo returned nil")
             return []
         }
 
-        var result: [TrackedWindow] = []
+        var result: [WindowListEntry] = []
         result.reserveCapacity(list.count)
         for info in list {
             guard
-                let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue, layer == 0,
+                let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue,
                 let number = (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
-                let pid = (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value, pid != ownPID,
+                let pid = (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
                 let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
                 let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
             else { continue }
 
-            let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1
-            guard alpha > 0 else { continue }
-            guard bounds.width > minimumSize.width, bounds.height > minimumSize.height else { continue }
+            result.append(WindowListEntry(
+                id: number,
+                layer: layer,
+                ownerPID: pid,
+                ownerName: info[kCGWindowOwnerName as String] as? String ?? "",
+                name: info[kCGWindowName as String] as? String,
+                alpha: (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1,
+                bounds: bounds
+            ))
+        }
+        return result
+    }
 
-            let owner = info[kCGWindowOwnerName as String] as? String ?? ""
-            result.append(TrackedWindow(id: number, ownerName: owner, ownerPID: pid, frame: bounds))
+    /// Ordinary app windows (layer 0, visible, not tiny, not ours), front to back.
+    static func ordinaryWindows(in list: [WindowListEntry], excludingPID ownPID: pid_t) -> [TrackedWindow] {
+        var result: [TrackedWindow] = []
+        for entry in list {
+            guard entry.layer == 0, entry.ownerPID != ownPID, entry.alpha > 0 else { continue }
+            guard entry.bounds.width > minimumSize.width, entry.bounds.height > minimumSize.height else { continue }
+            result.append(TrackedWindow(id: entry.id, ownerName: entry.ownerName, ownerPID: entry.ownerPID, frame: entry.bounds))
         }
         return result
     }

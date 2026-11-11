@@ -10,6 +10,19 @@ struct TrackedWindow: Equatable, Sendable {
     let frame: CGRect
 }
 
+/// One raw entry of `CGWindowListCopyWindowInfo`, before any filtering.
+struct WindowListEntry: Equatable, Sendable {
+    let id: CGWindowID
+    let layer: Int
+    let ownerPID: pid_t
+    let ownerName: String
+    /// Window title; only present when the app may record the screen.
+    let name: String?
+    let alpha: Double
+    /// CG global coordinates.
+    let bounds: CGRect
+}
+
 /// Change of a tracked window between two polls.
 enum WindowEvent: Equatable, Sendable {
     case added(TrackedWindow)
