@@ -92,6 +92,8 @@ final class SnowView: MTKView, OverlayContent {
 
     func update(surfaces: [TrackedSurface], screen: NSScreen) {
         lastScreen = screen
+        // Only the top inset: the Dock's side and bottom insets must not clip anything.
+        renderer.menuBarInset = Float(max(0, screen.frame.maxY - screen.visibleFrame.maxY))
         configureLayer()
         syncWorldBounds(screen.frame.size)
         if surfaces != lastSurfaces {
