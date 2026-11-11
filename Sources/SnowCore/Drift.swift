@@ -1,3 +1,5 @@
+import Foundation
+
 /// Height map of snow lying on top of one surface.
 ///
 /// Local coordinates: `x` runs from the surface's left edge (0) to `width`;
@@ -14,13 +16,19 @@ public final class Drift {
     public var reposeSlope: Float
     /// Height the outermost columns can keep, in units of one repose step.
     public var edgeHold: Float = 1
+    /// Largest height (pt) a column may stand above or sink below the mean of its two
+    /// neighbours. `settle` diffuses anything beyond that, which rounds peaks and fills
+    /// notches so the bank keeps a soft outline instead of a sawtooth.
+    public var bumpHold: Float = 0.12
+    /// Spread (standard deviation, pt) of the gaussian a single deposit is smeared over.
+    public var depositSpread: Float = 6
 
     /// Snow that slid off the left/right edges during settling, waiting to be turned into flakes.
     var pendingSpillLeft: Float = 0
     var pendingSpillRight: Float = 0
     private var reverseSweep = false
 
-    public init(width: Float, columnSpacing: Float = 4, maxHeight: Float = 48, reposeSlope: Float = 0.6) {
+    public init(width: Float, columnSpacing: Float = 4, maxHeight: Float = 48, reposeSlope: Float = 0.35) {
         let w = Drift.sanitizedWidth(width)
         let spacing = max(0.5, columnSpacing)
         let n = Drift.makeColumnCount(width: w, spacing: spacing)
@@ -57,32 +65,58 @@ public final class Drift {
         Drift.sample(heights, spacing: columnSpacing, width: width, at: localX)
     }
 
-    /// Adds `amount` pt² of snow around `localX`. Returns what was accepted (columns cap at `maxHeight`).
+    /// Adds `amount` pt² of snow around `localX`, spread over a small gaussian of
+    /// neighbouring columns so one flake never raises a lone spike. Returns what was
+    /// accepted (columns cap at `maxHeight`).
     @discardableResult
     public func deposit(atX localX: Float, amount: Float) -> Float {
         guard amount > 0, amount.isFinite, localX >= 0, localX <= width else { return 0 }
-        let f = localX / columnSpacing
-        let i = min(Int(f), heights.count - 2)
-        let t = min(1, max(0, f - Float(i)))
-        let dh = amount / columnSpacing
-        let accepted = add(dh * (1 - t), at: i) + add(dh * t, at: i + 1)
+        let n = heights.count
+        let sigma = depositSpread.isFinite ? max(0, depositSpread) : 0
+        let reach = sigma * 2.5
+        let lo = max(0, Int(((localX - reach) / columnSpacing).rounded(.up)))
+        let hi = min(n - 1, Int(((localX + reach) / columnSpacing).rounded(.down)))
+        guard sigma > 0, hi > lo else {
+            // Spread narrower than a column: split linearly between the two nearest ones.
+            let f = localX / columnSpacing
+            let i = min(Int(f), n - 2)
+            let t = min(1, max(0, f - Float(i)))
+            let dh = amount / columnSpacing
+            return (add(dh * (1 - t), at: i) + add(dh * t, at: i + 1)) * columnSpacing
+        }
+        let inv = 1 / (2 * sigma * sigma)
+        var total: Float = 0
+        for i in lo...hi {
+            let dx = columnX(i) - localX
+            total += exp(-dx * dx * inv)
+        }
+        guard total > 0 else { return 0 }
+        let dh = amount / columnSpacing / total
+        var accepted: Float = 0
+        for i in lo...hi {
+            let dx = columnX(i) - localX
+            accepted += add(dh * exp(-dx * dx * inv), at: i)
+        }
         return accepted * columnSpacing
     }
 
-    /// Relaxes slopes steeper than `reposeSlope`. Mass moves only between neighbours,
-    /// except at the two ends where it slides off. Returns the amount that slid off (pt²).
+    /// Relaxes slopes steeper than `reposeSlope`, then diffuses bumps and notches taller
+    /// than `bumpHold`. Mass moves only between neighbours, except at the two ends where
+    /// it slides off. Returns the amount that slid off (pt²).
     @discardableResult
     public func settle(passes: Int = 1) -> Float {
         let n = heights.count
         guard n >= 2, passes > 0 else { return 0 }
         let maxStep = reposeSlope * columnSpacing
         let edgeMax = maxStep * edgeHold
+        let bump = bumpHold.isFinite ? max(0, bumpHold) : 0
         var reverse = reverseSweep
         var spillLeft: Float = 0
         var spillRight: Float = 0
 
         heights.withUnsafeMutableBufferPointer { h in
             for _ in 0..<passes {
+                smooth(h, limit: bump)
                 for k in 0..<(n - 1) {
                     let i = reverse ? n - 2 - k : k
                     let diff = h[i] - h[i + 1]
@@ -114,6 +148,34 @@ public final class Drift {
         pendingSpillLeft += spillLeft * columnSpacing
         pendingSpillRight += spillRight * columnSpacing
         return (spillLeft + spillRight) * columnSpacing
+    }
+
+    /// One pass of thresholded diffusion. A column more than `limit` above the mean of its
+    /// neighbours sheds part of the excess to them, half each; one more than `limit` below
+    /// takes the same from them. Mass is conserved and heights stay within 0...maxHeight.
+    private func smooth(_ h: UnsafeMutableBufferPointer<Float>, limit: Float) {
+        let n = h.count
+        guard n >= 3 else { return }
+        for i in 1..<(n - 1) {
+            let mean = (h[i - 1] + h[i + 1]) * 0.5
+            let excess = h[i] - mean
+            if excess > limit {
+                // Moving m out lowers the excess by 1.5 m; take a third so it cannot overshoot.
+                var m = (excess - limit) / 3
+                m = min(m, 2 * max(0, maxHeight - h[i - 1]), 2 * max(0, maxHeight - h[i + 1]))
+                guard m > 0 else { continue }
+                h[i] -= m
+                h[i - 1] += m * 0.5
+                h[i + 1] += m * 0.5
+            } else if excess < -limit {
+                var m = (-excess - limit) / 3
+                m = min(m, 2 * h[i - 1], 2 * h[i + 1], max(0, maxHeight - h[i]))
+                guard m > 0 else { continue }
+                h[i] += m
+                h[i - 1] -= m * 0.5
+                h[i + 1] -= m * 0.5
+            }
+        }
     }
 
     /// Removes snow covered by a circle (mitten). Snow below the circle stays. Returns removed pt².
