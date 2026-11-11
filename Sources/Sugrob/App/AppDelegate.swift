@@ -39,6 +39,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.overlay = overlay
 
         let tracker = WindowTracker()
+        tracker.excludedWindowIDs = { [weak overlay] in
+            overlay?.windowIDs ?? []
+        }
         self.tracker = tracker
 
         let menuBar = MenuBarController(settings: settings)

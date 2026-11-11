@@ -57,6 +57,14 @@ final class OverlayController: NSObject {
         entries.removeAll()
     }
 
+    /// Window numbers of the overlay windows, which the window tracker must skip.
+    var windowIDs: Set<CGWindowID> {
+        Set(entries.values.compactMap { entry in
+            let number = entry.window.windowNumber
+            return number > 0 ? CGWindowID(number) : nil
+        })
+    }
+
     /// Every screen currently covered, with its content view.
     var contents: [(screen: NSScreen, content: any OverlayContent)] {
         entries.values.map { (screen: $0.screen, content: $0.content) }
