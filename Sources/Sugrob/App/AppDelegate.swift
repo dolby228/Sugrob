@@ -10,6 +10,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBar: MenuBarController?
     private var tracker: WindowTracker?
     private var overlay: OverlayController?
+    private var power: PowerMonitor?
+    /// Nil when Metal is unavailable; overlays then fall back to `DebugOverlayView`.
+    private var pipelines: RenderPipelines?
 
     /// `main.swift` top-level code is nonisolated, so the delegate must be creatable there.
     /// Everything else happens in `applicationDidFinishLaunching` on the main actor.
@@ -23,10 +26,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settings = Settings()
         self.settings = settings
 
-        let overlay = OverlayController { [weak self] _ in
-            let view = DebugOverlayView(frame: .zero)
-            view.showsOutlines = self?.debugOutlinesEnabled ?? DebugOverlayView.environmentForcesOutlines
-            return view
+        let power = PowerMonitor()
+        self.power = power
+        pipelines = RenderPipelines.makeDefault()
+
+        let overlay = OverlayController { [weak self] screen in
+            guard let self else { return DebugOverlayView(frame: .zero) }
+            return self.makeContent(for: screen)
         }
         self.overlay = overlay
 
@@ -43,6 +49,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         settings.addObserver { [weak self] key in
             self?.settingsChanged(key)
+        }
+        power.onChange = { [weak self] profile in
+            self?.applyPower(profile)
         }
 
         overlay.start()
@@ -62,6 +71,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DebugOverlayView.environmentForcesOutlines || (settings?.showDebugOutlines ?? false)
     }
 
+    /// A Metal snow view when possible, otherwise the outline-only debug view.
+    private func makeContent(for screen: NSScreen) -> any OverlayContent {
+        let frame = NSRect(origin: .zero, size: screen.frame.size)
+        if let pipelines, let settings {
+            let view = SnowView(frame: frame, pipelines: pipelines, settings: settings)
+            view.applyPower(power?.profile ?? .normal)
+            view.showsDebugOutlines = debugOutlinesEnabled
+            return view
+        }
+        let view = DebugOverlayView(frame: frame)
+        view.showsOutlines = debugOutlinesEnabled
+        return view
+    }
+
     private func settingsChanged(_ key: Settings.Key) {
         guard let settings else { return }
         switch key {
@@ -70,6 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .showDebugOutlines:
             applyDebugOutlines()
         case .snowfall, .windX, .windY, .tool:
+            // Snowfall and wind reach each SnowView through its WorldSettingsBinder.
             break
         }
     }
@@ -78,7 +102,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let overlay else { return }
         let enabled = debugOutlinesEnabled
         for entry in overlay.contents {
-            (entry.content as? DebugOverlayView)?.showsOutlines = enabled
+            if let snow = entry.content as? SnowView {
+                snow.showsDebugOutlines = enabled
+            } else if let debug = entry.content as? DebugOverlayView {
+                debug.showsOutlines = enabled
+            }
+        }
+    }
+
+    private func applyPower(_ profile: PowerMonitor.Profile) {
+        guard let overlay else { return }
+        for entry in overlay.contents {
+            (entry.content as? SnowView)?.applyPower(profile)
         }
     }
 
