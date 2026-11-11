@@ -33,7 +33,7 @@ Requirements: macOS 13 or newer, Apple Silicon or Intel.
 
 Hotkeys ⌃⌥⌘S, ⌃⌥⌘,, ⌃⌥⌘K and ⌃⌥⌘Q work in any app and need no permissions (Carbon `RegisterEventHotKey`). If another app already owns one of them, it is skipped and logged.
 
-Global mouse monitors only observe events, they never swallow them: the app under the cursor still receives the same click or drag.
+Clicks pass through the snow: Sugrob watches the mouse with global monitors, which only observe events. While you work the snow it takes the mouse for a moment, so the drag does not also select text or move the window underneath: with the shovel over snow (or carrying a load), or with ⌥ held over snow, the overlay of that screen accepts the click, the cursor turns into a hand, and it lets go as soon as the cursor leaves the snow and the button is released. The mitten never takes the mouse, and neither does the snow over the menu bar or system panels. A click on the snow never activates Sugrob, so the app you work in keeps its focus.
 
 ## Privacy
 

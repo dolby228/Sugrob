@@ -7,7 +7,8 @@ private let log = Logger(subsystem: "dev.sugrob", category: "tracker")
 ///
 /// Uses `CGWindowListCopyWindowInfo`, which needs no permissions for window bounds.
 /// Only ordinary app windows are kept: layer 0, visible (alpha > 0), larger than 40x40
-/// and not owned by this process (our own overlay windows must never collect snow).
+/// and not one of our overlays (they must never collect snow). Other windows of Sugrob,
+/// such as the settings window, collect snow and occlude like any app window.
 /// Windows above layer 0 but below the overlay (system panels, Spotlight, banners,
 /// floating palettes) are kept separately as occluders: they never carry snow but hide
 /// any drift behind them.
@@ -16,6 +17,8 @@ final class WindowTracker: NSObject {
     /// Called on the main thread after a poll that changed anything: the window list
     /// (including z-order) or the Dock area. `windows` is ordered front to back.
     var onUpdate: (@MainActor (_ windows: [TrackedWindow], _ events: [WindowEvent]) -> Void)?
+    /// Window numbers of our overlay windows, skipped everywhere.
+    var excludedWindowIDs: (@MainActor () -> Set<CGWindowID>)?
 
     /// Current windows, front to back, in CG global coordinates.
     private(set) var windows: [TrackedWindow] = []
@@ -41,7 +44,6 @@ final class WindowTracker: NSObject {
     /// Displays hidden behind a full-screen system panel.
     private var coveredDisplays: Set<CGDirectDisplayID> = []
     private let dockLocator = DockLocator()
-    private let ownPID = getpid()
 
     init(interval: TimeInterval = 0.1) {
         self.interval = interval
@@ -79,8 +81,9 @@ final class WindowTracker: NSObject {
 
     /// Reads the window list once and fires `onUpdate` if something changed.
     func poll() {
-        let list = Self.readWindowList()
-        let current = Self.ordinaryWindows(in: list, excludingPID: ownPID)
+        let excluded = excludedWindowIDs?() ?? []
+        let list = Self.readWindowList().filter { !excluded.contains($0.id) }
+        let current = Self.ordinaryWindows(in: list)
         let events = Self.diff(old: windows, new: current)
         let orderChanged = events.isEmpty && current.map(\.id) != windows.map(\.id)
 
@@ -159,8 +162,8 @@ final class WindowTracker: NSObject {
 
     // MARK: Occluders
 
-    /// Visible windows above layer 0 and below the overlay, front to back, except ours,
-    /// the menu bar, the Dock tile window and full-screen backdrops.
+    /// Visible windows above layer 0 and below the overlay, front to back, except the
+    /// menu bar, the Dock tile window and full-screen backdrops.
     private func findOccluders(in list: [WindowListEntry], dockWindowIDs: Set<CGWindowID>) -> [TrackedWindow] {
         let primaryHeight = Coordinates.primaryScreenHeight
         let screens = NSScreen.screens.map { Coordinates.cgRect(fromCocoa: $0.frame, primaryHeight: primaryHeight) }
@@ -169,7 +172,7 @@ final class WindowTracker: NSObject {
         for entry in list {
             guard
                 entry.layer > 0, entry.layer < Self.overlayLayer,
-                entry.ownerPID != ownPID, entry.alpha > 0,
+                entry.alpha > 0,
                 entry.bounds.width > Self.minimumSize.width, entry.bounds.height > Self.minimumSize.height,
                 !Self.ignoredOccluderOwners.contains(entry.ownerName),
                 !dockWindowIDs.contains(entry.id)
@@ -252,11 +255,11 @@ final class WindowTracker: NSObject {
         return result
     }
 
-    /// Ordinary app windows (layer 0, visible, not tiny, not ours), front to back.
-    static func ordinaryWindows(in list: [WindowListEntry], excludingPID ownPID: pid_t) -> [TrackedWindow] {
+    /// Ordinary app windows (layer 0, visible, not tiny), front to back.
+    static func ordinaryWindows(in list: [WindowListEntry]) -> [TrackedWindow] {
         var result: [TrackedWindow] = []
         for entry in list {
-            guard entry.layer == 0, entry.ownerPID != ownPID, entry.alpha > 0 else { continue }
+            guard entry.layer == 0, entry.alpha > 0 else { continue }
             guard entry.bounds.width > minimumSize.width, entry.bounds.height > minimumSize.height else { continue }
             result.append(TrackedWindow(id: entry.id, ownerName: entry.ownerName, ownerPID: entry.ownerPID, frame: entry.bounds))
         }

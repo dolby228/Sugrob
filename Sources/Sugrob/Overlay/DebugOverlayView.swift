@@ -22,6 +22,9 @@ final class DebugOverlayView: NSView, OverlayContent {
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
 
+    /// Never takes the mouse itself: on top of `SnowView` the snow view must get the events.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
     func update(surfaces: [TrackedSurface], screen: NSScreen) {
         guard surfaces != self.surfaces else { return }
         self.surfaces = surfaces

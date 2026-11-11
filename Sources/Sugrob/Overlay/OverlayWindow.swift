@@ -1,14 +1,18 @@
 import AppKit
 
-/// Transparent, click-through, borderless window covering one whole screen.
+/// Transparent, borderless window covering one whole screen. Click-through by default;
+/// `MouseInput` makes it take the mouse only while the snow is being worked.
+///
+/// A non-activating panel: a click on it never activates Sugrob, so the app the user works
+/// in keeps its focus and key window.
 @MainActor
-final class OverlayWindow: NSWindow {
+final class OverlayWindow: NSPanel {
     convenience init(screen: NSScreen) {
         // The non-`screen:` initializer takes the rect in Cocoa global coordinates,
         // which is exactly what `screen.frame` is.
         self.init(
             contentRect: screen.frame,
-            styleMask: [.borderless],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -17,6 +21,10 @@ final class OverlayWindow: NSWindow {
         backgroundColor = .clear
         hasShadow = false
         ignoresMouseEvents = true
+        acceptsMouseMovedEvents = true
+        // Panels hide on deactivation by default; Sugrob is practically never active.
+        hidesOnDeactivate = false
+        becomesKeyOnlyIfNeeded = true
         // `.statusBar` (25) sits above normal and floating windows, the Dock (20) and the
         // menu bar (24), so snow is visible over everything that can carry a drift.
         level = .statusBar

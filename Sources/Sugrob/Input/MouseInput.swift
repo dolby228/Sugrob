@@ -6,9 +6,18 @@ private let log = Logger(subsystem: "dev.sugrob", category: "input")
 
 /// Watches the mouse everywhere on screen and drives the snow tools.
 ///
-/// The overlay windows ignore mouse events, so nothing is ever blocked: we only observe
-/// with `NSEvent` monitors (global for other apps, local for our own menu). Monitors do
-/// not consume events, so the app under the cursor still receives every click and drag.
+/// Most of the time the overlay windows ignore mouse events and we only observe with
+/// `NSEvent` monitors (global for other apps, local for our own windows). Monitors do not
+/// consume events, so the app under the cursor still receives every click and drag.
+///
+/// Working the snow must not also select text or drag the window underneath, so the
+/// overlay of the cursor's screen takes the mouse (dynamic capture) while:
+/// - the shovel is over a drift with snow, or carries a load;
+/// - ⌥ Option is held over a drift with snow;
+/// - a press that started captured has not been released yet.
+/// The captured overlay's `SnowView` then feeds its events into the same handler. The
+/// mitten only hovers and never captures. Capture is re-checked on every move and
+/// modifier change, and by a watchdog timer while it is on.
 ///
 /// - Варежка (mitten): moving the cursor with no button pressed sweeps snow off drifts,
 ///   kicking it in the direction of movement.
@@ -26,6 +35,59 @@ final class MouseInput {
     static let maxScoopDepth: Float = 8
     /// Depth of the bladeful scooped on press.
     static let pressScoopDepth: Float = 10
+    /// How close to snow the cursor must be to capture the mouse.
+    static let captureTolerance: Float = 12
+    static let captureMinHeight: Float = 0.5
+    /// How often capture is re-checked while it is on and no events may arrive.
+    static let watchdogInterval: TimeInterval = 0.1
+
+    /// Asks the overlay of `screen` to take the mouse; nil gives it back everywhere.
+    var onCaptureChange: (@MainActor (_ screen: NSScreen?) -> Void)?
+    /// True where the overlay must never take the mouse: the menu bar, system panels,
+    /// a hidden snow view. Screen-local y-down point.
+    var isCaptureBlocked: (@MainActor (_ screen: NSScreen, _ point: SIMD2<Float>) -> Bool)?
+
+    /// One mouse or modifier event, whichever way it reached us.
+    struct PointerEvent {
+        enum Kind {
+            case moved, down, dragged, up, flags
+        }
+
+        let kind: Kind
+        /// Cocoa global.
+        let location: CGPoint
+        let timestamp: TimeInterval
+        let option: Bool
+
+        /// Nil for event types the tools do not use.
+        init?(_ event: NSEvent) {
+            switch event.type {
+            case .mouseMoved: kind = .moved
+            case .leftMouseDown: kind = .down
+            case .leftMouseDragged: kind = .dragged
+            case .leftMouseUp: kind = .up
+            case .flagsChanged: kind = .flags
+            default: return nil
+            }
+            // Events from global monitors carry no window; the current location is exact enough.
+            location = NSEvent.mouseLocation
+            timestamp = event.timestamp
+            option = event.modifierFlags.contains(.option)
+        }
+
+        init(kind: Kind, location: CGPoint, timestamp: TimeInterval, option: Bool) {
+            self.kind = kind
+            self.location = location
+            self.timestamp = timestamp
+            self.option = option
+        }
+    }
+
+    /// The same event can reach us twice (local monitor and the captured view).
+    private struct EventKey: Equatable {
+        let type: UInt
+        let timestamp: TimeInterval
+    }
 
     private struct Target {
         let screen: NSScreen
@@ -58,6 +120,12 @@ final class MouseInput {
     /// World whose shovel carries the load / shows the blade.
     private weak var shovelWorld: SnowWorld?
     private var optionDown = false
+    private var lastEventKey: EventKey?
+    /// Display whose overlay currently takes the mouse.
+    private var captureDisplay: CGDirectDisplayID?
+    /// The current press went to the captured overlay; capture holds until it is released.
+    private var capturedPress = false
+    private var watchdog: Timer?
 
     init(settings: Settings, worlds: @escaping WorldProvider) {
         self.settings = settings
@@ -70,13 +138,13 @@ final class MouseInput {
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] event in
             guard let self else { return }
             MainActor.assumeIsolated {
-                self.handle(event)
+                self.receive(event)
             }
         }
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
             guard let self else { return event }
             MainActor.assumeIsolated {
-                self.handle(event)
+                self.receive(event)
             }
             return event
         }
@@ -98,7 +166,9 @@ final class MouseInput {
             world.releaseBall(id, velocity: .zero)
         }
         drag = .idle
+        capturedPress = false
         dumpCarriedLoad()
+        setCapture(nil)
     }
 
     /// Switching away from the shovel drops what it carries.
@@ -106,25 +176,51 @@ final class MouseInput {
         if settings.tool != .shovel {
             dumpCarriedLoad()
         }
+        updateCapture(at: locate(NSEvent.mouseLocation))
     }
 
     // MARK: Events
 
-    private func handle(_ event: NSEvent) {
-        let type = event.type
-        if type == .flagsChanged {
-            optionDown = event.modifierFlags.contains(.option)
+    /// Entry point for every source of mouse events.
+    func receive(_ event: NSEvent) {
+        guard let pointer = PointerEvent(event) else { return }
+        let key = EventKey(type: UInt(event.type.rawValue), timestamp: event.timestamp)
+        guard key != lastEventKey else { return }
+        lastEventKey = key
+        handle(pointer)
+    }
+
+    private func handle(_ event: PointerEvent) {
+        optionDown = event.option
+        if event.kind == .flags {
+            if !isGestureInProgress {
+                updateCapture(at: locate(event.location))
+            }
             return
         }
         guard !settings.isPaused else {
             if case .idle = drag {} else { cancel() }
+            capturedPress = false
+            setCapture(nil)
             return
         }
 
-        let cocoa = NSEvent.mouseLocation
-        trackVelocity(cocoa, timestamp: event.timestamp, reset: type == .leftMouseDown)
+        if event.kind == .down {
+            capturedPress = captureDisplay != nil
+        }
+        let located = locate(event.location)
+        process(event, located: located)
+        if event.kind == .up {
+            capturedPress = false
+        }
+        updateCapture(at: located)
+    }
+
+    private func process(_ event: PointerEvent, located: Target?) {
+        let type = event.kind
+        let cocoa = event.location
+        trackVelocity(cocoa, timestamp: event.timestamp, reset: type == .down)
         defer { lastCocoa = cocoa }
-        let located = locate(cocoa)
         defer {
             lastPoint = located?.point
             lastWorld = located?.world
@@ -132,10 +228,10 @@ final class MouseInput {
 
         // A snowball stays in its own world even when the cursor leaves that screen.
         if case .snowball(let world, let screen, let id) = drag,
-           type == .leftMouseDragged || type == .leftMouseUp {
+           type == .dragged || type == .up {
             let point = Self.localPoint(cocoa, on: screen)
             let alive = world.rollBall(id, to: point)
-            if type == .leftMouseUp {
+            if type == .up {
                 world.releaseBall(id, velocity: velocity)
                 log.debug("snowball \(id) released")
                 drag = .idle
@@ -146,7 +242,7 @@ final class MouseInput {
         }
 
         guard let target = located else {
-            if type == .leftMouseUp {
+            if type == .up {
                 if case .shovel(true) = drag { dumpCarriedLoad() }
                 drag = .idle
             }
@@ -154,16 +250,15 @@ final class MouseInput {
         }
 
         switch type {
-        case .mouseMoved:
+        case .moved:
             mouseMoved(target)
-        case .leftMouseDown:
-            let option = event.modifierFlags.contains(.option) || optionDown
-            mouseDown(target, option: option)
-        case .leftMouseDragged:
+        case .down:
+            mouseDown(target, option: event.option)
+        case .dragged:
             mouseDragged(target)
-        case .leftMouseUp:
+        case .up:
             mouseUp(target)
-        default:
+        case .flags:
             break
         }
     }
@@ -226,6 +321,101 @@ final class MouseInput {
             break
         }
         drag = .idle
+    }
+
+    // MARK: Capture
+
+    private var isGestureInProgress: Bool {
+        if capturedPress { return true }
+        if case .idle = drag { return false }
+        return true
+    }
+
+    /// Takes or gives back the mouse for the cursor at `target`.
+    private func updateCapture(at target: Target?) {
+        if isGestureInProgress {
+            // Never switch mid-gesture: a captured press keeps its window, and a press
+            // that went to another app is not grabbed halfway through.
+            if captureDisplay != nil { NSCursor.closedHand.set() }
+            return
+        }
+        // A button held down for another app (dragging a window over a drift).
+        if NSEvent.pressedMouseButtons & 1 != 0 {
+            setCapture(nil)
+            return
+        }
+        guard let target, wantsCapture(target) else {
+            setCapture(nil)
+            return
+        }
+        setCapture(target.screen)
+    }
+
+    private func wantsCapture(_ target: Target) -> Bool {
+        guard !settings.isPaused else { return false }
+        if isCaptureBlocked?(target.screen, target.point) ?? false { return false }
+        if settings.tool == .shovel, let carrier = shovelWorld, carrier.shovelLoad > 0 { return true }
+        guard settings.tool == .shovel || optionDown else { return false }
+        return target.world.driftSurfaceID(
+            at: target.point,
+            tolerance: Self.captureTolerance,
+            minHeight: Self.captureMinHeight
+        ) != nil
+    }
+
+    private func setCapture(_ screen: NSScreen?) {
+        let display = screen?.displayID
+        guard display != captureDisplay else {
+            if display != nil { NSCursor.openHand.set() }
+            return
+        }
+        captureDisplay = display
+        onCaptureChange?(display == nil ? nil : screen)
+        if let display {
+            NSCursor.openHand.set()
+            startWatchdog()
+            log.debug("mouse captured on display \(Int(display))")
+        } else {
+            NSCursor.arrow.set()
+            stopWatchdog()
+            log.debug("mouse capture released")
+        }
+    }
+
+    private func startWatchdog() {
+        guard watchdog == nil else { return }
+        let timer = Timer(timeInterval: Self.watchdogInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.checkCapture()
+            }
+        }
+        timer.tolerance = Self.watchdogInterval * 0.2
+        RunLoop.main.add(timer, forMode: .common)
+        watchdog = timer
+    }
+
+    private func stopWatchdog() {
+        watchdog?.invalidate()
+        watchdog = nil
+    }
+
+    /// While captured, moves over our own window may not be reported, snow can melt under a
+    /// still cursor and a release can get lost; none of that may leave the mouse captured.
+    private func checkCapture() {
+        guard captureDisplay != nil else {
+            stopWatchdog()
+            return
+        }
+        let location = NSEvent.mouseLocation
+        let option = NSEvent.modifierFlags.contains(.option)
+        if isGestureInProgress {
+            guard NSEvent.pressedMouseButtons & 1 == 0 else { return }
+            log.debug("mouse up never arrived, finishing the gesture")
+            handle(PointerEvent(kind: .up, location: location, timestamp: ProcessInfo.processInfo.systemUptime, option: option))
+            return
+        }
+        optionDown = option
+        updateCapture(at: locate(location))
     }
 
     // MARK: Tools
