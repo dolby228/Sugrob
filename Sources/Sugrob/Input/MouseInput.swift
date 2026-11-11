@@ -27,6 +27,35 @@ final class MouseInput {
     /// Depth of the bladeful scooped on press.
     static let pressScoopDepth: Float = 10
 
+    /// One mouse or modifier event, whichever way it reached us.
+    struct PointerEvent {
+        enum Kind {
+            case moved, down, dragged, up, flags
+        }
+
+        let kind: Kind
+        /// Cocoa global.
+        let location: CGPoint
+        let timestamp: TimeInterval
+        let option: Bool
+
+        /// Nil for event types the tools do not use.
+        init?(_ event: NSEvent) {
+            switch event.type {
+            case .mouseMoved: kind = .moved
+            case .leftMouseDown: kind = .down
+            case .leftMouseDragged: kind = .dragged
+            case .leftMouseUp: kind = .up
+            case .flagsChanged: kind = .flags
+            default: return nil
+            }
+            // Events from global monitors carry no window; the current location is exact enough.
+            location = NSEvent.mouseLocation
+            timestamp = event.timestamp
+            option = event.modifierFlags.contains(.option)
+        }
+    }
+
     private struct Target {
         let screen: NSScreen
         let world: SnowWorld
@@ -70,13 +99,13 @@ final class MouseInput {
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] event in
             guard let self else { return }
             MainActor.assumeIsolated {
-                self.handle(event)
+                self.receive(event)
             }
         }
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
             guard let self else { return event }
             MainActor.assumeIsolated {
-                self.handle(event)
+                self.receive(event)
             }
             return event
         }
@@ -110,10 +139,16 @@ final class MouseInput {
 
     // MARK: Events
 
-    private func handle(_ event: NSEvent) {
-        let type = event.type
-        if type == .flagsChanged {
-            optionDown = event.modifierFlags.contains(.option)
+    /// Entry point for every source of mouse events.
+    func receive(_ event: NSEvent) {
+        guard let pointer = PointerEvent(event) else { return }
+        handle(pointer)
+    }
+
+    private func handle(_ event: PointerEvent) {
+        let type = event.kind
+        if type == .flags {
+            optionDown = event.option
             return
         }
         guard !settings.isPaused else {
@@ -121,8 +156,8 @@ final class MouseInput {
             return
         }
 
-        let cocoa = NSEvent.mouseLocation
-        trackVelocity(cocoa, timestamp: event.timestamp, reset: type == .leftMouseDown)
+        let cocoa = event.location
+        trackVelocity(cocoa, timestamp: event.timestamp, reset: type == .down)
         defer { lastCocoa = cocoa }
         let located = locate(cocoa)
         defer {
@@ -132,10 +167,10 @@ final class MouseInput {
 
         // A snowball stays in its own world even when the cursor leaves that screen.
         if case .snowball(let world, let screen, let id) = drag,
-           type == .leftMouseDragged || type == .leftMouseUp {
+           type == .dragged || type == .up {
             let point = Self.localPoint(cocoa, on: screen)
             let alive = world.rollBall(id, to: point)
-            if type == .leftMouseUp {
+            if type == .up {
                 world.releaseBall(id, velocity: velocity)
                 log.debug("snowball \(id) released")
                 drag = .idle
@@ -146,7 +181,7 @@ final class MouseInput {
         }
 
         guard let target = located else {
-            if type == .leftMouseUp {
+            if type == .up {
                 if case .shovel(true) = drag { dumpCarriedLoad() }
                 drag = .idle
             }
@@ -154,16 +189,15 @@ final class MouseInput {
         }
 
         switch type {
-        case .mouseMoved:
+        case .moved:
             mouseMoved(target)
-        case .leftMouseDown:
-            let option = event.modifierFlags.contains(.option) || optionDown
-            mouseDown(target, option: option)
-        case .leftMouseDragged:
+        case .down:
+            mouseDown(target, option: event.option || optionDown)
+        case .dragged:
             mouseDragged(target)
-        case .leftMouseUp:
+        case .up:
             mouseUp(target)
-        default:
+        case .flags:
             break
         }
     }
