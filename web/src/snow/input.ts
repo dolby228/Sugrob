@@ -1,7 +1,7 @@
 /** Pointer and keyboard handling for the snow demo canvas. */
 import type { ViewState } from './render';
 import type { Ball } from './snowman';
-import type { Intensity, Surface, WindDir, World } from './world';
+import { SHOVEL_HALF_WIDTH, type Intensity, type Surface, type WindDir, type World } from './world';
 
 export interface InputCallbacks {
   onWind(dir: WindDir): void;
@@ -13,11 +13,21 @@ type Mode =
   | { kind: 'drag'; surface: Surface; offX: number; offY: number; t: number }
   | { kind: 'mitten' }
   | { kind: 'ball'; ball: Ball }
+  /** Shovel pressed: scooping along the path; a drag throws the load on release. */
+  | { kind: 'shovel'; dragged: boolean; startX: number; startY: number; lastX: number; lastY: number }
+  /** This press threw the load left from a plain click; the rest of it does nothing. */
+  | { kind: 'shovelDumped' }
   /** Touch press waiting to become either a sweep or a snowball. */
   | { kind: 'pending'; x: number; y: number; timer: number };
 
 /** Hold time on a drift before a touch starts a snowball, ms. */
 const LONG_PRESS = 380;
+/** Snow a plain shovel press scrapes off, px. */
+const PRESS_SCOOP_DEPTH = 8;
+/** Most a single drag sample scrapes off, px. */
+const MAX_SCOOP_DEPTH = 6;
+/** Movement after which a shovel press counts as a drag, px. */
+const DRAG_SLOP = 4;
 
 const LEVELS: Intensity[] = ['light', 'steady', 'blizzard'];
 
@@ -28,6 +38,7 @@ export class Input {
     pointerInside: false,
     pointerDown: false,
     showMitten: false,
+    showShovel: false,
   };
 
   /** Whether the simulation is running; tools do nothing while paused. */
@@ -93,7 +104,16 @@ export class Input {
     }
 
     if (this.world.tool === 'shovel') {
-      if (this.running) this.world.shovel();
+      if (!this.running) {
+        this.mode = { kind: 'idle' };
+      } else if (this.world.shovelLoad > 0) {
+        // Load kept after a plain click: this press throws it.
+        this.world.dump(x, y, 0, 0);
+        this.mode = { kind: 'shovelDumped' };
+      } else {
+        this.world.scoop(x, y, PRESS_SCOOP_DEPTH);
+        this.mode = { kind: 'shovel', dragged: false, startX: x, startY: y, lastX: x, lastY: y };
+      }
     } else if (e.pointerType !== 'mouse' && this.running) {
       const timer = window.setTimeout(() => {
         if (this.mode.kind !== 'pending') return;
@@ -124,6 +144,11 @@ export class Input {
       this.world.moveSurface(m.surface, x - m.offX, y - m.offY, dt);
     } else if (m.kind === 'ball') {
       this.world.yard.roll(m.ball, x, y);
+    } else if (m.kind === 'shovel') {
+      if (!m.dragged && Math.hypot(x - m.startX, y - m.startY) > DRAG_SLOP) m.dragged = true;
+      if (m.dragged && this.running) this.scoopAlong(m.lastX, m.lastY, x, y);
+      m.lastX = x;
+      m.lastY = y;
     } else if (m.kind === 'pending' && Math.hypot(x - m.x, y - m.y) > 8) {
       window.clearTimeout(m.timer);
       this.mode = { kind: 'mitten' };
@@ -136,11 +161,24 @@ export class Input {
     const m = this.mode;
     if (m.kind === 'ball') this.world.yard.release(m.ball, this.velX, this.velY);
     if (m.kind === 'pending') window.clearTimeout(m.timer);
+    const [ux, uy] = this.local(e);
+    if (m.kind === 'shovel' && m.dragged) this.world.dump(ux, uy, this.velX, this.velY);
     this.mode = { kind: 'idle' };
     this.view.pointerDown = false;
     if (e.pointerType !== 'mouse') this.view.pointerInside = false;
-    const [x, y] = this.local(e);
-    this.updateCursor(x, y);
+    this.updateCursor(ux, uy);
+  }
+
+  /** Scrapes the drift along the drag path, about as deep per px travelled at any speed. */
+  private scoopAlong(x0: number, y0: number, x1: number, y1: number): void {
+    const distance = Math.hypot(x1 - x0, y1 - y0);
+    if (distance < 0.01) return;
+    const samples = Math.min(40, Math.max(1, Math.ceil(distance / (SHOVEL_HALF_WIDTH * 0.5))));
+    const depth = Math.max(0.5, Math.min(MAX_SCOOP_DEPTH, (distance * 0.35) / samples));
+    for (let i = 1; i <= samples; i++) {
+      const t = i / samples;
+      this.world.scoop(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, depth);
+    }
   }
 
   private leave(): void {
@@ -165,13 +203,22 @@ export class Input {
 
   private updateCursor(x: number, y: number): void {
     const mitten = this.world.tool === 'mitten';
+    const shovel = this.world.tool === 'shovel';
+    const k = this.mode.kind;
     let cursor = 'default';
-    if (this.mode.kind === 'drag' || this.mode.kind === 'ball') cursor = 'grabbing';
-    else if (this.world.titleBarAt(x, y)) cursor = 'grab';
-    else if (mitten) cursor = this.pointerType === 'mouse' ? 'none' : 'default';
-    else cursor = 'pointer';
+    if (k === 'drag' || k === 'ball') cursor = 'grabbing';
+    else if (k !== 'shovel' && this.world.titleBarAt(x, y)) cursor = 'grab';
+    else if (this.pointerType === 'mouse') cursor = 'none';
     this.canvas.style.cursor = cursor;
-    this.view.showMitten = mitten && (cursor === 'none' || this.mode.kind === 'mitten');
+    this.view.showMitten = mitten && (cursor === 'none' || k === 'mitten');
+    // The blade follows the cursor; on touch it shows while pressed or loaded.
+    this.view.showShovel =
+      shovel && k !== 'drag' && k !== 'ball' && (cursor === 'none' || k === 'shovel' || this.world.shovelLoad > 0);
+  }
+
+  /** Re-evaluates the cursor after the tool changes. */
+  refresh(): void {
+    this.updateCursor(this.view.pointerX, this.view.pointerY);
   }
 
   /** Called every animation frame. */

@@ -232,13 +232,9 @@ kbd {
 }
 
 .logo-mark {
+  flex: none;
   width: 32px;
   height: 32px;
-  color: var(--ice);
-}
-
-.logo-drift {
-  fill: var(--snow);
 }
 
 .logo-word {
@@ -553,6 +549,13 @@ section {
   z-index: 1;
 }
 
+.demo-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
 .demo-pause[aria-pressed='true'] {
   border-color: var(--ice);
   color: var(--ice-strong);
@@ -656,6 +659,64 @@ section {
 .step p {
   margin-top: 8px;
   color: var(--muted);
+}
+
+code {
+  padding: 0.1em 0.35em;
+  border-radius: 6px;
+  background: rgb(255 255 255 / 0.06);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.86em;
+}
+
+/* A long shell command: its own line, wraps anywhere instead of overflowing. */
+code.cmd {
+  display: block;
+  margin-top: 10px;
+  padding: 8px 10px;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.hotkeys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 24px;
+  margin-top: 16px;
+  padding: 20px 26px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgb(255 255 255 / 0.02);
+}
+
+.hotkeys h3 {
+  font-size: 18px;
+}
+
+.hotkeys dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  margin: 0;
+}
+
+.hotkeys dl div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hotkeys dd {
+  margin: 0;
+  color: var(--muted);
+}
+
+.hotkeys p {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 14px;
 }
 
 /* FAQ */

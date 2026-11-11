@@ -1,7 +1,18 @@
 /** Canvas 2D renderer for the snow demo. */
 import { CELL } from './drift';
 import { SNOWMAN_BALLS, type PlacedBall } from './snowman';
-import { CLUMP, FLAKE, MENU_BAR, PUFF, TITLE_BAR, type Surface, type World } from './world';
+import {
+  CLUMP,
+  FLAKE,
+  MENU_BAR,
+  PUFF,
+  SHOVEL_CAPACITY,
+  SHOVEL_HALF_WIDTH,
+  TITLE_BAR,
+  type Heap,
+  type Surface,
+  type World,
+} from './world';
 
 export interface ViewState {
   pointerX: number;
@@ -10,6 +21,8 @@ export interface ViewState {
   pointerDown: boolean;
   /** Draw the mitten ring under the cursor. */
   showMitten: boolean;
+  /** Draw the shovel blade (with its load) at the cursor. */
+  showShovel: boolean;
 }
 
 const FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif';
@@ -223,8 +236,97 @@ export class Renderer {
     }
 
     this.drawParticles(world);
+    for (const heap of world.heaps) this.drawHeap(heap);
     for (const b of world.yard.balls) if (!b.surface) this.drawBall(b);
     this.drawCursor(view);
+    this.drawShovel(world, view);
+  }
+
+  /** A thrown shovel load: one lumpy clump of snow that tumbles in flight. */
+  private drawHeap(c: Heap): void {
+    const ctx = this.ctx;
+    const rnd = mulberry32(c.seed);
+    const g = ctx.createRadialGradient(c.x - c.r * 0.35, c.y - c.r * 0.4, c.r * 0.1, c.x, c.y, c.r * 1.2);
+    g.addColorStop(0, '#ffffff');
+    g.addColorStop(0.7, '#eef4ff');
+    g.addColorStop(1, '#bccde9');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, c.r * 0.78, 0, Math.PI * 2);
+    const lobes = 7;
+    for (let k = 0; k < lobes; k++) {
+      const a = c.rot + (k / lobes) * Math.PI * 2 + rnd() * 0.5;
+      const d = c.r * (0.45 + rnd() * 0.2);
+      const lr = c.r * (0.38 + rnd() * 0.22);
+      const lx = c.x + Math.cos(a) * d;
+      const ly = c.y + Math.sin(a) * d;
+      ctx.moveTo(lx + lr, ly);
+      ctx.arc(lx, ly, lr, 0, Math.PI * 2);
+    }
+    ctx.fill();
+  }
+
+  /** Small shovel at the cursor; the scooped snow rides on the blade as a heap. */
+  private drawShovel(world: World, view: ViewState): void {
+    if (!view.showShovel || (!view.pointerInside && world.shovelLoad <= 0)) return;
+    const ctx = this.ctx;
+    const x = view.pointerX;
+    const y = view.pointerY;
+    const hw = SHOVEL_HALF_WIDTH;
+    const lip = y + 1.5;
+    const back = y - 5;
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    // Handle with a T grip, leaning up and to the right.
+    ctx.strokeStyle = '#8a5a34';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x + 2, back + 1);
+    ctx.lineTo(x + 15, back - 22);
+    ctx.stroke();
+    ctx.strokeStyle = '#2b3550';
+    ctx.lineWidth = 3.2;
+    ctx.beginPath();
+    ctx.moveTo(x + 10.5, back - 24.5);
+    ctx.lineTo(x + 19.5, back - 19.5);
+    ctx.stroke();
+
+    // Blade: a shallow scoop, its front lip at the cursor.
+    const steel = ctx.createLinearGradient(0, back, 0, lip);
+    steel.addColorStop(0, '#9fb3d6');
+    steel.addColorStop(1, '#5d7099');
+    ctx.fillStyle = steel;
+    ctx.beginPath();
+    ctx.moveTo(x - hw, back);
+    ctx.lineTo(x + hw, back);
+    ctx.quadraticCurveTo(x + hw + 1, lip, x + hw - 3, lip);
+    ctx.lineTo(x - hw + 3, lip);
+    ctx.quadraticCurveTo(x - hw - 1, lip, x - hw, back);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(230, 240, 255, 0.85)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // The load: a mound whose height grows with the snow carried, capped by the blade.
+    const fill = Math.min(1, Math.sqrt(world.shovelLoad / SHOVEL_CAPACITY));
+    if (fill > 0.02) {
+      const mh = 2 + fill * 15;
+      const mw = hw * (0.55 + 0.4 * fill);
+      const g = ctx.createLinearGradient(0, back - mh, 0, back);
+      g.addColorStop(0, '#ffffff');
+      g.addColorStop(1, '#d6e3f7');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(x - mw, back + 0.5);
+      ctx.bezierCurveTo(x - mw * 0.8, back - mh * 0.7, x - mw * 0.35, back - mh * 1.05, x - mw * 0.05, back - mh);
+      ctx.bezierCurveTo(x + mw * 0.3, back - mh * 0.95, x + mw * 0.45, back - mh * 0.6, x + mw * 0.6, back - mh * 0.55);
+      ctx.bezierCurveTo(x + mw * 0.85, back - mh * 0.45, x + mw, back - mh * 0.15, x + mw, back + 0.5);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
   }
 
   private drawCursor(view: ViewState): void {
