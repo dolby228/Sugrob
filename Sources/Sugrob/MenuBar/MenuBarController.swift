@@ -105,6 +105,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(loginItem)
         menu.addItem(.separator())
 
+        let diagnosticsItem = NSMenuItem(
+            title: "Скопировать диагностику",
+            action: #selector(copyDiagnostics(_:)),
+            keyEquivalent: ""
+        )
+        diagnosticsItem.target = self
+        menu.addItem(diagnosticsItem)
+
         let aboutItem = NSMenuItem(title: "О Sugrob", action: #selector(showAbout(_:)), keyEquivalent: "")
         aboutItem.target = self
         menu.addItem(aboutItem)
@@ -189,6 +197,27 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func toggleLaunchAtLogin(_ sender: NSMenuItem) {
         LaunchAtLogin.toggle()
         refreshStates()
+    }
+
+    @objc private func copyDiagnostics(_ sender: NSMenuItem) {
+        copyDiagnostics()
+    }
+
+    func copyDiagnostics() {
+        Diagnostics.copyToPasteboard(settings: settings, statusItem: statusItemDiagnostics())
+    }
+
+    /// Status item geometry for «Скопировать диагностику».
+    func statusItemDiagnostics() -> [String: Any] {
+        let window = statusItem.button?.window
+        return [
+            "isVisible": statusItem.isVisible,
+            "autosaveName": statusItem.autosaveName ?? "",
+            "hasButtonWindow": window != nil,
+            "windowFrame": Diagnostics.rect(window?.frame),
+            "occlusionVisible": window.map { $0.occlusionState.contains(.visible) } ?? false,
+            "screen": window?.screen?.localizedName ?? "",
+        ]
     }
 
     @objc private func showAbout(_ sender: NSMenuItem) {
