@@ -234,7 +234,11 @@ final class SnowRenderer {
     /// Stencil is 8 bit and 255 is the clear value, so this many surfaces can be ordered.
     static let maxOrderedSurfaces = 254
     /// Height of the anti-aliasing strip above the top edge, in points.
-    static let feather: Float = 1.2
+    static let feather: Float = 1.5
+    /// Curve points per column gap when the bank outline is subdivided.
+    static let driftSubdivisions = 3
+    /// Standard deviation (pt) of the gaussian that softens the simulated heights.
+    static let driftSmoothing: Float = 7
 
     private struct DrawRange {
         var start: Int
@@ -251,6 +255,9 @@ final class SnowRenderer {
     private var stencilTexture: MTLTexture?
 
     private var displayHeights: [Float] = []
+    private var smoothingKernel: [Float] = []
+    /// Subdivided bank outline: local x, height and slope (dh/dx) per point.
+    private var driftCurve: [SIMD3<Float>] = []
     private var occluderDraws: [DrawRange] = []
     private var driftDraws: [DrawRange] = []
     private var shapeDraws: [DrawRange] = []
@@ -570,7 +577,7 @@ final class SnowRenderer {
         for k in 0..<limit {
             guard let drift = world.drifts[order[k]], !drift.isEmpty else { continue }
             backmostSnowy = k
-            maxVertices += (drift.columnCount - 1) * 12
+            maxVertices += (drift.columnCount - 1) * Self.driftSubdivisions * 12
         }
         // Only surfaces in front of the back-most snowy (or snowman-carrying) one can hide anything.
         let backmost = max(backmostSnowy, min(backmostShapeSurface, limit - 1))
@@ -614,41 +621,103 @@ final class SnowRenderer {
         return driftDraws.isEmpty && occluderDraws.isEmpty ? nil : buffer
     }
 
-    /// Smooths the simulated height map a little, adds lumps and rounds the ends,
-    /// so the bank looks soft instead of like a bar chart.
+    /// Softens the simulated height map with a gaussian, adds gentle long-wavelength
+    /// undulation and rounds the ends, so the bank reads as one fluffy mass.
     private func fillDisplayHeights(_ drift: Drift, seed: Float) {
         let n = drift.columnCount
         if displayHeights.count < n {
             displayHeights.append(contentsOf: repeatElement(0, count: n - displayHeights.count))
         }
+        let sigma = Self.driftSmoothing / drift.columnSpacing
+        let radius = max(1, min(12, Int((sigma * 2.5).rounded(.up))))
+        smoothingKernel.removeAll(keepingCapacity: true)
+        for k in 0...radius {
+            let d = Float(k)
+            smoothingKernel.append(exp(-d * d / (2 * sigma * sigma)))
+        }
         let width = drift.width
         drift.heights.withUnsafeBufferPointer { src in
-            displayHeights.withUnsafeMutableBufferPointer { dst in
-                for i in 0..<n {
-                    var sum: Float = 0
-                    var weights: Float = 0
-                    for k in -2...2 {
-                        let j = i + k
-                        guard j >= 0, j < n else { continue }
-                        let w = Float(3 - abs(k))
-                        sum += src[j] * w
-                        weights += w
+            smoothingKernel.withUnsafeBufferPointer { kernel in
+                displayHeights.withUnsafeMutableBufferPointer { dst in
+                    for i in 0..<n {
+                        var sum: Float = 0
+                        var weights: Float = 0
+                        for k in -radius...radius {
+                            let j = i + k
+                            guard j >= 0, j < n else { continue }
+                            let w = kernel[abs(k)]
+                            sum += src[j] * w
+                            weights += w
+                        }
+                        var h = sum / weights
+                        guard h > 0.15 else {
+                            dst[i] = 0
+                            continue
+                        }
+                        let x = drift.columnX(i)
+                        // Long, low swells (wavelengths of roughly 60 and 110 pt).
+                        h *= 1 + 0.07 * Self.valueNoise(x / 110, seed: seed)
+                            + 0.035 * Self.valueNoise(x / 60, seed: seed + 17)
+                        let edge = min(x, width - x)
+                        let reach = max(3, h * 1.6)
+                        if edge < reach {
+                            h *= sin(max(0, edge / reach) * .pi / 2)
+                        }
+                        dst[i] = h
                     }
-                    var h = sum / weights
-                    guard h > 0.15 else {
-                        dst[i] = 0
-                        continue
-                    }
-                    let x = drift.columnX(i)
-                    h *= 1 + 0.08 * sin(x * 0.17 + seed) + 0.05 * sin(x * 0.43 + seed * 1.7)
-                    let edge = min(x, width - x)
-                    let reach = max(2, h * 1.2)
-                    if edge < reach {
-                        h *= max(0, edge / reach).squareRoot()
-                    }
-                    dst[i] = h
                 }
             }
+        }
+    }
+
+    /// Smooth 1D value noise in -1...1 with one random value per integer lattice point.
+    private static func valueNoise(_ x: Float, seed: Float) -> Float {
+        let cell = x.rounded(.down)
+        let f = x - cell
+        let u = f * f * (3 - 2 * f)
+        let a = lattice(Int32(clamping: Int(cell)), seed: seed)
+        let b = lattice(Int32(clamping: Int(cell) + 1), seed: seed)
+        return a + (b - a) * u
+    }
+
+    private static func lattice(_ i: Int32, seed: Float) -> Float {
+        var v = (UInt32(bitPattern: i) &* 0x9E37_79B1) ^ (UInt32(seed * 1013) &* 0x85EB_CA6B)
+        v ^= v >> 15
+        v = v &* 0x2C1B_3C6D
+        v ^= v >> 12
+        return Float(v & 0xFFFF) / 32767.5 - 1
+    }
+
+    /// Catmull-Rom through the display heights, `driftSubdivisions` points per column gap.
+    private func fillDriftCurve(_ drift: Drift) {
+        let n = drift.columnCount
+        let steps = Self.driftSubdivisions
+        let spacing = drift.columnSpacing
+        driftCurve.removeAll(keepingCapacity: true)
+        displayHeights.withUnsafeBufferPointer { h in
+            for i in 0..<(n - 1) {
+                let pm = h[max(0, i - 1)]
+                let p0 = h[i]
+                let p1 = h[i + 1]
+                let p2 = h[min(n - 1, i + 2)]
+                let c1 = p1 - pm
+                let c2 = 2 * pm - 5 * p0 + 4 * p1 - p2
+                let c3 = -pm + 3 * p0 - 3 * p1 + p2
+                let x0 = drift.columnX(i)
+                for k in 0..<steps {
+                    let s = Float(k) / Float(steps)
+                    var value = 0.5 * (2 * p0 + (c1 + (c2 + c3 * s) * s) * s)
+                    var slope = 0.5 * (c1 + (2 * c2 + 3 * c3 * s) * s) / spacing
+                    if value <= 0 || (p0 <= 0 && p1 <= 0) {
+                        value = 0
+                        slope = 0
+                    }
+                    driftCurve.append(SIMD3(x0 + s * spacing, value, slope))
+                }
+            }
+            let last = max(0, h[n - 1])
+            let slope = last > 0 ? (last - h[n - 2]) / spacing : 0
+            driftCurve.append(SIMD3(drift.columnX(n - 1), last, slope))
         }
     }
 
@@ -659,9 +728,9 @@ final class SnowRenderer {
         to out: UnsafeMutablePointer<DriftVertex>,
         from start: Int
     ) -> Int {
-        let n = drift.columnCount
-        guard n >= 2 else { return start }
+        guard drift.columnCount >= 2 else { return start }
         fillDisplayHeights(drift, seed: seed)
+        fillDriftCurve(drift)
 
         var cursor = start
         let surfaceTop = rect.y
@@ -669,24 +738,33 @@ final class SnowRenderer {
         let baseY = rect.y + 0.5
         let feather = Self.feather
 
-        displayHeights.withUnsafeBufferPointer { h in
-            for i in 0..<(n - 1) {
-                let h0 = h[i]
-                let h1 = h[i + 1]
-                if h0 <= 0 && h1 <= 0 { continue }
-                let x0 = rect.x + drift.columnX(i)
-                let x1 = rect.x + drift.columnX(i + 1)
-                let top0 = surfaceTop - h0
-                let top1 = surfaceTop - h1
-                let f0 = min(feather, h0)
-                let f1 = min(feather, h1)
+        // Top point and the outer end of its feather, pushed out along the outline's normal.
+        func edge(_ p: SIMD3<Float>) -> (top: SIMD2<Float>, outer: SIMD2<Float>) {
+            let top = SIMD2<Float>(rect.x + p.x, surfaceTop - p.y)
+            // y grows down, so the outline is y = top - h(x) and its upward normal is (-h', -1).
+            let normal = simd_normalize(SIMD2<Float>(-p.z, -1))
+            return (top, top + normal * min(feather, p.y))
+        }
 
-                let a = DriftVertex(position: SIMD2(x0, top0), dist: 0, t: 0)
-                let b = DriftVertex(position: SIMD2(x1, top1), dist: 0, t: 0)
-                let c = DriftVertex(position: SIMD2(x0, baseY), dist: h0, t: 1)
-                let d = DriftVertex(position: SIMD2(x1, baseY), dist: h1, t: 1)
-                let fa = DriftVertex(position: SIMD2(x0, top0 - f0), dist: 0, t: -1)
-                let fb = DriftVertex(position: SIMD2(x1, top1 - f1), dist: 0, t: -1)
+        driftCurve.withUnsafeBufferPointer { curve in
+            guard curve.count >= 2 else { return }
+            var prev = curve[0]
+            var prevEdge = edge(prev)
+            for j in 1..<curve.count {
+                let next = curve[j]
+                let nextEdge = edge(next)
+                defer {
+                    prev = next
+                    prevEdge = nextEdge
+                }
+                if prev.y <= 0 && next.y <= 0 { continue }
+
+                let a = DriftVertex(position: prevEdge.top, dist: 0, t: 0)
+                let b = DriftVertex(position: nextEdge.top, dist: 0, t: 0)
+                let c = DriftVertex(position: SIMD2(prevEdge.top.x, baseY), dist: prev.y, t: 1)
+                let d = DriftVertex(position: SIMD2(nextEdge.top.x, baseY), dist: next.y, t: 1)
+                let fa = DriftVertex(position: prevEdge.outer, dist: 0, t: -1)
+                let fb = DriftVertex(position: nextEdge.outer, dist: 0, t: -1)
 
                 out[cursor] = a
                 out[cursor + 1] = b
