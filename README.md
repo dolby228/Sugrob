@@ -28,6 +28,7 @@ Requirements: macOS 13 or newer, Apple Silicon or Intel.
 | Snowball | Hold ⌥ and drag along a drift, release to throw. Three stacked balls become a snowman |
 | Clear everything | **Очистить сугробы**, or ⌃⌥⌘K |
 | Start at login | **Запускать при входе** |
+| Exact Dock width | **Точный размер Dock…** or **Разрешить…** in the settings window (grants Accessibility) |
 | Settings window | **Настройки…**, ⌃⌥⌘, or open Sugrob.app again while it runs |
 | Quit | **Выйти**, **Выйти из Sugrob** in the settings window, or ⌃⌥⌘Q |
 
@@ -37,7 +38,7 @@ Clicks pass through the snow: Sugrob watches the mouse with global monitors, whi
 
 ## Privacy
 
-Sugrob reads only window bounds via `CGWindowListCopyWindowInfo`. It does not read window contents or titles, needs no Screen Recording or Accessibility permission and makes no network requests.
+Sugrob reads only window bounds via `CGWindowListCopyWindowInfo`. It does not read window contents or titles, needs no Screen Recording permission and makes no network requests. Accessibility is optional and asked for only when you choose **Точный размер Dock…**: it is used to read the Dock's tile frames, nothing else. Without it the Dock width is estimated from the Dock preferences. Builds are signed ad-hoc, so macOS ties the grant to the exact binary: after updating Sugrob, remove the old entry from Privacy & Security → Accessibility and add it again.
 
 ## Build
 

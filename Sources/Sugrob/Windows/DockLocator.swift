@@ -8,9 +8,12 @@ private let log = Logger(subsystem: "dev.sugrob", category: "tracker")
 ///
 /// The reserved strip (`screen.frame` vs `screen.visibleFrame`) only says which edge the
 /// Dock is on; the tiles themselves are usually much narrower. Sources, best first:
-/// 1. The Dock's `AXList` element, if Accessibility is already granted (never prompted).
+/// 1. The union of the Dock's `AXList` elements (or of its `AXDockItem`s) lying in the
+///    strip, padded to the Dock glass. Needs Accessibility, which is requested only from
+///    the settings window or the status menu («Точный размер Dock…»).
 /// 2. A Dock-owned window at Dock level that lies in the strip and is smaller than it.
-/// 3. An estimate from the `com.apple.dock` preferences (tile size and tile count).
+/// 3. An estimate from the `com.apple.dock` preferences and the running apps (see
+///    `DockPreferences`).
 /// 4. 55% of the strip, centered.
 /// The result is always clipped to the strip.
 ///
@@ -40,6 +43,13 @@ final class DockLocator {
     static let slowRefreshInterval: TimeInterval = 1
     /// Share of the strip used when nothing better is known.
     static let guessedShare: CGFloat = 0.55
+    /// The AX tile frames cover the icons; the Dock glass reaches this much further out.
+    static let accessibilityPadding: CGFloat = 5
+    /// How deep the AX tree of the Dock is searched, and how many elements at most.
+    static let accessibilityMaxDepth = 4
+    static let accessibilityMaxElements = 400
+    /// After an app launches or quits the Dock animates its tiles: re-read after these delays.
+    static let launchRefreshDelays: [TimeInterval] = [0.3, 1.3]
     /// The menu bar is a window of this owner at the main menu level.
     static let menuBarOwner = "Window Server"
     static let menuBarLevel = Int(CGWindowLevelForKey(.mainMenuWindow))
@@ -57,15 +67,20 @@ final class DockLocator {
     private(set) var dockPID: pid_t?
     private var lastSlowRefresh: TimeInterval = -.infinity
     private var preferences: DockPreferences?
-    /// CG global frame of the Dock tile list read via Accessibility.
-    private var accessibilityFrame: CGRect?
+    /// Dock tile frames read via Accessibility, CG global.
+    private(set) var accessibilityTiles: AccessibilityTiles?
+    private var observingChanges = false
+    private var pendingRefreshes: [DispatchWorkItem] = []
     private var loggedDockWindows: [WindowListEntry] = []
     private var loggedSources: [Int: Source] = [:]
     private var loggedFullScreen: [Int: FullScreenReason] = [:]
+    /// The last result, for «Скопировать диагностику».
+    private var lastFrames: [Int: CGRect] = [:]
 
     /// Dock frames for every screen where the Dock is shown. `list` is the raw window list,
     /// `windows` the ordinary (layer 0) windows front to back.
     func locate(in list: [WindowListEntry], windows: [TrackedWindow]) -> Result {
+        observeChangesIfNeeded()
         refreshSlowSources()
         let dockWindows = list.filter { isDockOwned($0) }
         logDockWindows(dockWindows)
@@ -73,6 +88,7 @@ final class DockLocator {
         var result = Result()
         if preferences?.autohide == true {
             logSources([:])
+            lastFrames = [:]
             return result
         }
         var sources: [Int: Source] = [:]
@@ -109,16 +125,17 @@ final class DockLocator {
 
             var frame: CGRect?
             var source = Source.guess
-            if let accessibilityFrame {
-                let local = Coordinates.screenLocal(
-                    fromCG: accessibilityFrame,
-                    screenFrame: screenFrame,
-                    primaryHeight: primaryHeight
-                )
-                if Self.liesInStrip(local, strip: strip, edge: edge), let fitted = Self.fit(local, in: strip) {
-                    frame = fitted
-                    source = .accessibility
-                }
+            if let accessibilityTiles,
+               let tiles = Self.accessibilityFrame(
+                   accessibilityTiles,
+                   screenFrame: screenFrame,
+                   primaryHeight: primaryHeight,
+                   strip: strip,
+                   edge: edge
+               ),
+               let fitted = Self.fit(tiles, in: strip) {
+                frame = fitted
+                source = .accessibility
             }
             if frame == nil, let tileWindow, let fitted = Self.fit(tileWindow, in: strip) {
                 frame = fitted
@@ -150,6 +167,7 @@ final class DockLocator {
         }
 
         logSources(sources)
+        lastFrames = result.frames
         return result
     }
 
@@ -217,6 +235,47 @@ final class DockLocator {
             log.debug("dock \(id) left the full-screen space")
         }
         loggedFullScreen = fullScreen
+    }
+
+    /// What the last `locate` saw and decided, for «Скопировать диагностику». Keys of
+    /// `screens` are `WindowTracker.dockSurfaceID(for:)`; frames there are screen-local
+    /// y-down, the raw AX frames CG global.
+    var diagnostics: [String: Any] {
+        func orNull(_ value: Any?) -> Any { value ?? NSNull() }
+        var screens: [String: Any] = [:]
+        for screen in NSScreen.screens {
+            let id = WindowTracker.dockSurfaceID(for: screen)
+            var entry: [String: Any] = ["name": screen.localizedName]
+            entry["source"] = orNull(loggedSources[id]?.rawValue)
+            entry["frame"] = Diagnostics.rect(lastFrames[id])
+            entry["fullScreen"] = orNull(loggedFullScreen[id]?.rawValue)
+            if let reserved = Self.reservedStrip(for: screen) {
+                let (strip, edge) = reserved
+                entry["strip"] = Diagnostics.rect(strip)
+                entry["edge"] = String(describing: edge)
+                if let tiles = accessibilityTiles {
+                    let frame = Self.accessibilityFrame(
+                        tiles,
+                        screenFrame: screen.frame,
+                        primaryHeight: Coordinates.primaryScreenHeight,
+                        strip: strip,
+                        edge: edge
+                    )
+                    entry["accessibilityFrame"] = Diagnostics.rect(frame)
+                }
+            }
+            screens[String(id)] = entry
+        }
+        let lists: [Any] = accessibilityTiles?.lists.map { Diagnostics.rect($0) } ?? []
+        let items: [Any] = accessibilityTiles?.items.map { Diagnostics.rect($0) } ?? []
+        return [
+            "screens": screens,
+            "dockPID": orNull(dockPID.map { Int($0) }),
+            "accessibilityTrusted": AXIsProcessTrusted(),
+            "accessibilityLists": lists,
+            "accessibilityItems": items,
+            "estimate": orNull(preferences?.diagnostics),
+        ]
     }
 
     private func logSources(_ sources: [Int: Source]) {
@@ -320,61 +379,171 @@ final class DockLocator {
             log.debug("dock preferences \(String(describing: preferences), privacy: .public)")
         }
 
-        var axFrame: CGRect?
+        var tiles: AccessibilityTiles?
         if let pid = dockPID, AXIsProcessTrusted() {
-            axFrame = Self.readAccessibilityFrame(dockPID: pid)
+            tiles = Self.readAccessibilityTiles(dockPID: pid)
         }
-        if axFrame != accessibilityFrame {
-            accessibilityFrame = axFrame
-            log.debug("dock accessibility frame \(String(describing: axFrame), privacy: .public)")
+        if tiles != accessibilityTiles {
+            accessibilityTiles = tiles
+            log.debug("dock accessibility tiles \(String(describing: tiles), privacy: .public)")
         }
     }
 
-    /// Frame of the Dock's tile list (`AXList`), in CG global coordinates (AX uses the
-    /// same top-left, y-down space). Needs Accessibility; never asks for it.
-    static func readAccessibilityFrame(dockPID: pid_t) -> CGRect? {
-        let app = AXUIElementCreateApplication(dockPID)
-        _ = AXUIElementSetMessagingTimeout(app, 0.25)
+    /// Makes the next poll re-read the slow sources.
+    func invalidateSlowSources() {
+        lastSlowRefresh = -.infinity
+    }
 
-        var childrenValue: CFTypeRef?
-        guard
-            AXUIElementCopyAttributeValue(app, "AXChildren" as CFString, &childrenValue) == .success,
-            let children = childrenValue as? [AXUIElement]
-        else { return nil }
-
-        var best: CGRect?
-        for child in children {
-            var roleValue: CFTypeRef?
-            guard
-                AXUIElementCopyAttributeValue(child, "AXRole" as CFString, &roleValue) == .success,
-                let role = roleValue as? String, role == "AXList"
-            else { continue }
-
-            var positionValue: CFTypeRef?
-            var sizeValue: CFTypeRef?
-            guard
-                AXUIElementCopyAttributeValue(child, "AXPosition" as CFString, &positionValue) == .success,
-                AXUIElementCopyAttributeValue(child, "AXSize" as CFString, &sizeValue) == .success,
-                let positionRef = positionValue, let sizeRef = sizeValue,
-                CFGetTypeID(positionRef) == AXValueGetTypeID(),
-                CFGetTypeID(sizeRef) == AXValueGetTypeID()
-            else { continue }
-
-            var origin = CGPoint.zero
-            var size = CGSize.zero
-            // The type ids were checked above, so these casts cannot fail.
-            guard
-                AXValueGetValue(positionRef as! AXValue, .cgPoint, &origin),
-                AXValueGetValue(sizeRef as! AXValue, .cgSize, &size),
-                size.width > 0, size.height > 0
-            else { continue }
-
-            let frame = CGRect(origin: origin, size: size)
-            if best.map({ frame.width * frame.height > $0.width * $0.height }) ?? true {
-                best = frame
+    /// Tiles appear and disappear as apps launch and quit; the Dock animates the change,
+    /// so the frame is re-read shortly after and once more when the animation is over.
+    private func observeChangesIfNeeded() {
+        guard !observingChanges else { return }
+        observingChanges = true
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.scheduleRefreshes()
+                }
             }
         }
-        return best
+        // Access granted or revoked: switch sources on the next poll, no restart needed.
+        NotificationCenter.default.addObserver(forName: .sugrobAccessibilityDidChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.invalidateSlowSources()
+            }
+        }
+    }
+
+    /// Debounced: a burst of launches restarts the delays.
+    private func scheduleRefreshes() {
+        for work in pendingRefreshes {
+            work.cancel()
+        }
+        pendingRefreshes = Self.launchRefreshDelays.map { delay in
+            let work = DispatchWorkItem { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.invalidateSlowSources()
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+            return work
+        }
+    }
+
+    // MARK: Accessibility
+
+    /// Dock tile frames in CG global coordinates (AX uses the same top-left, y-down space).
+    struct AccessibilityTiles: Equatable, CustomStringConvertible {
+        /// Every `AXList` of the Dock; normally one, the tile row.
+        var lists: [CGRect] = []
+        /// Every `AXDockItem`, for when the lists are missing or not usable.
+        var items: [CGRect] = []
+
+        var description: String {
+            "lists \(lists) items \(items.count) union \(String(describing: DockLocator.union(items)))"
+        }
+    }
+
+    /// The Dock rect on one screen from the AX tiles, screen-local, padded to the glass:
+    /// the union of the lists lying in the strip, or of the items if the lists are missing
+    /// or as long as the strip (then they say nothing about the tiles).
+    static func accessibilityFrame(
+        _ tiles: AccessibilityTiles,
+        screenFrame: CGRect,
+        primaryHeight: CGFloat,
+        strip: CGRect,
+        edge: Edge
+    ) -> CGRect? {
+        func inStrip(_ frames: [CGRect]) -> CGRect? {
+            let local = frames
+                .map { Coordinates.screenLocal(fromCG: $0, screenFrame: screenFrame, primaryHeight: primaryHeight) }
+                .filter { liesInStrip($0, strip: strip, edge: edge) }
+            return union(local)
+        }
+        let padding = accessibilityPadding
+        if let lists = inStrip(tiles.lists), isShorterThanStrip(lists, strip: strip, edge: edge) {
+            return lists.insetBy(dx: -padding, dy: -padding)
+        }
+        if let items = inStrip(tiles.items) {
+            return items.insetBy(dx: -padding, dy: -padding)
+        }
+        return nil
+    }
+
+    nonisolated static func union(_ frames: [CGRect]) -> CGRect? {
+        guard var result = frames.first else { return nil }
+        for frame in frames.dropFirst() {
+            result = result.union(frame)
+        }
+        return result
+    }
+
+    /// Walks the Dock's AX tree (a few levels deep: on newer macOS the list can be nested)
+    /// and collects the frames of every `AXList` and `AXDockItem`. Nil when nothing is found.
+    /// Needs Accessibility; never asks for it.
+    static func readAccessibilityTiles(dockPID: pid_t) -> AccessibilityTiles? {
+        let app = AXUIElementCreateApplication(dockPID)
+        var tiles = AccessibilityTiles()
+        var budget = accessibilityMaxElements
+        collect(app, depth: 0, into: &tiles, budget: &budget)
+        return tiles.lists.isEmpty && tiles.items.isEmpty ? nil : tiles
+    }
+
+    private static func collect(_ element: AXUIElement, depth: Int, into tiles: inout AccessibilityTiles, budget: inout Int) {
+        guard budget > 0 else { return }
+        budget -= 1
+        _ = AXUIElementSetMessagingTimeout(element, 0.25)
+        if depth > 0 {
+            switch stringAttribute("AXRole", of: element) {
+            case "AXList":
+                if let frame = frame(of: element) { tiles.lists.append(frame) }
+            case "AXDockItem":
+                // Items have no tiles inside.
+                if let frame = frame(of: element) { tiles.items.append(frame) }
+                return
+            default:
+                break
+            }
+        }
+        guard depth < accessibilityMaxDepth else { return }
+        var childrenValue: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(element, "AXChildren" as CFString, &childrenValue) == .success,
+            let children = childrenValue as? [AXUIElement]
+        else { return }
+        for child in children {
+            collect(child, depth: depth + 1, into: &tiles, budget: &budget)
+        }
+    }
+
+    private static func stringAttribute(_ name: String, of element: AXUIElement) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
+        return value as? String
+    }
+
+    /// `AXPosition` + `AXSize`, nil if missing or empty.
+    private static func frame(of element: AXUIElement) -> CGRect? {
+        var positionValue: CFTypeRef?
+        var sizeValue: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(element, "AXPosition" as CFString, &positionValue) == .success,
+            AXUIElementCopyAttributeValue(element, "AXSize" as CFString, &sizeValue) == .success,
+            let positionRef = positionValue, let sizeRef = sizeValue,
+            CFGetTypeID(positionRef) == AXValueGetTypeID(),
+            CFGetTypeID(sizeRef) == AXValueGetTypeID()
+        else { return nil }
+
+        var origin = CGPoint.zero
+        var size = CGSize.zero
+        // The type ids were checked above, so these casts cannot fail.
+        guard
+            AXValueGetValue(positionRef as! AXValue, .cgPoint, &origin),
+            AXValueGetValue(sizeRef as! AXValue, .cgSize, &size),
+            size.width > 0, size.height > 0
+        else { return nil }
+        return CGRect(origin: origin, size: size)
     }
 
     private func logDockWindows(_ windows: [WindowListEntry]) {
@@ -384,62 +553,5 @@ final class DockLocator {
         for window in windows {
             log.debug("dock window \(Int(window.id)) layer \(window.layer) alpha \(window.alpha) \(String(describing: window.bounds), privacy: .public) name \(window.name ?? "-", privacy: .public)")
         }
-    }
-}
-
-/// The parts of the `com.apple.dock` preferences that size the Dock.
-struct DockPreferences: Equatable, CustomStringConvertible {
-    var tileSize: CGFloat
-    var persistentApps: Int
-    var persistentOthers: Int
-    /// Running regular apps that are not kept in the Dock; they get tiles too.
-    var runningNotInDock: Int
-    var showRecents: Bool
-    var autohide: Bool
-    var orientation: String
-
-    /// Rough length of the tile row along its edge.
-    var estimatedLength: CGFloat {
-        // Recent apps show up to three tiles (running ones not kept in the Dock included).
-        let recents = showRecents ? max(runningNotInDock, 3) : runningNotInDock
-        // Finder + kept apps + running/recent apps + separator + folders/stacks + Trash.
-        let separators = recents > 0 ? 2 : 1
-        let slots = 1 + persistentApps + recents + persistentOthers + 1 + separators
-        return CGFloat(slots) * (tileSize + 4) + 16
-    }
-
-    var description: String {
-        "tile \(tileSize) apps \(persistentApps) others \(persistentOthers) running \(runningNotInDock) recents \(showRecents) autohide \(autohide) \(orientation)"
-    }
-
-    /// Nil when the Dock preferences cannot be read.
-    static func read() -> DockPreferences? {
-        guard let defaults = UserDefaults(suiteName: DockLocator.bundleID) else { return nil }
-        let apps = defaults.array(forKey: "persistent-apps")
-        let tileSize = defaults.object(forKey: "tilesize") as? NSNumber
-        guard apps != nil || tileSize != nil else { return nil }
-
-        var keptBundleIDs: Set<String> = ["com.apple.finder"]
-        for case let entry as [String: Any] in apps ?? [] {
-            if let data = entry["tile-data"] as? [String: Any], let id = data["bundle-identifier"] as? String {
-                keptBundleIDs.insert(id)
-            }
-        }
-        let running = NSWorkspace.shared.runningApplications.filter { app in
-            guard app.activationPolicy == .regular else { return false }
-            guard let id = app.bundleIdentifier else { return true }
-            return !keptBundleIDs.contains(id)
-        }.count
-
-        let size = CGFloat(tileSize?.doubleValue ?? 48)
-        return DockPreferences(
-            tileSize: size.isFinite && size > 0 ? size : 48,
-            persistentApps: apps?.count ?? 0,
-            persistentOthers: defaults.array(forKey: "persistent-others")?.count ?? 0,
-            runningNotInDock: running,
-            showRecents: (defaults.object(forKey: "show-recents") as? NSNumber)?.boolValue ?? true,
-            autohide: defaults.bool(forKey: "autohide"),
-            orientation: defaults.string(forKey: "orientation") ?? "bottom"
-        )
     }
 }

@@ -12,6 +12,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// Called at most once per launch when the status item turns out not to be visible.
     /// The argument is a short reason for the log.
     var onStatusItemHidden: ((String) -> Void)?
+    /// How the Dock was located, for «Скопировать диагностику».
+    var dockDiagnostics: (() -> [String: Any])?
 
     private var reportedHidden = false
     private var visibilityCheck: DispatchWorkItem?
@@ -26,6 +28,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var toolItems: [NSMenuItem] = []
     private let debugItem = NSMenuItem()
     private let loginItem = NSMenuItem()
+    private let accessibilityItem = NSMenuItem()
 
     init(settings: Settings) {
         self.settings = settings
@@ -188,6 +191,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         loginItem.action = #selector(toggleLaunchAtLogin(_:))
         loginItem.target = self
         menu.addItem(loginItem)
+
+        accessibilityItem.title = "Точный размер Dock…"
+        accessibilityItem.action = #selector(requestAccessibility(_:))
+        accessibilityItem.target = self
+        menu.addItem(accessibilityItem)
         menu.addItem(.separator())
 
         let diagnosticsItem = NSMenuItem(
@@ -252,6 +260,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         debugItem.toolTip = forced ? "Включено через SUGROB_DEBUG_WINDOWS=1" : nil
 
         loginItem.state = LaunchAtLogin.isEnabled ? .on : .off
+
+        let trusted = AccessibilityAccess.refresh()
+        accessibilityItem.state = trusted ? .on : .off
+        accessibilityItem.toolTip = trusted
+            ? "Рамка Dock читается через Универсальный доступ"
+            : "Выдать Sugrob доступ к Универсальному доступу, чтобы сугроб лёг точно по Dock"
     }
 
     // MARK: Actions
@@ -289,12 +303,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         refreshStates()
     }
 
+    @objc private func requestAccessibility(_ sender: NSMenuItem) {
+        AccessibilityAccess.request()
+        refreshStates()
+    }
+
     @objc private func copyDiagnostics(_ sender: NSMenuItem) {
         copyDiagnostics()
     }
 
     func copyDiagnostics() {
-        Diagnostics.copyToPasteboard(settings: settings, statusItem: statusItemDiagnostics())
+        Diagnostics.copyToPasteboard(
+            settings: settings,
+            statusItem: statusItemDiagnostics(),
+            dock: dockDiagnostics?()
+        )
     }
 
     /// Status item geometry for «Скопировать диагностику».

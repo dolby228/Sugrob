@@ -186,6 +186,9 @@ final class WindowTracker: NSObject {
         return result
     }
 
+    /// How the Dock was located (source per screen, AX state and frames, estimate inputs).
+    var dockDiagnostics: [String: Any] { dockLocator.diagnostics }
+
     /// Synthetic negative id of the Dock surface on a screen; stable across polls.
     static func dockSurfaceID(for screen: NSScreen) -> Int {
         -(Int(screen.displayID ?? 0) + 1)

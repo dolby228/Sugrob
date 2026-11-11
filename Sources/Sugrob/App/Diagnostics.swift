@@ -9,22 +9,23 @@ private let log = Logger(subsystem: "dev.sugrob", category: "app")
 /// «Скопировать диагностику»: a JSON report for bug reports.
 ///
 /// Contains screens, on-screen window bounds (owner, pid, layer, bounds, alpha; never
-/// window titles), the Accessibility trust flag, settings, the status item frame and which
-/// screens have their snow hidden behind a full-screen system panel.
+/// window titles), the Accessibility trust flag, how the Dock was located (source,
+/// AX frames, estimate inputs), settings, the status item frame and which screens
+/// have their snow hidden behind a full-screen system panel.
 @MainActor
 enum Diagnostics {
     /// Window tracker whose covered-screen state goes into the report; set at launch.
     static weak var tracker: WindowTracker?
 
-    static func copyToPasteboard(settings: Settings, statusItem: [String: Any]) {
-        let text = report(settings: settings, statusItem: statusItem)
+    static func copyToPasteboard(settings: Settings, statusItem: [String: Any], dock: [String: Any]?) {
+        let text = report(settings: settings, statusItem: statusItem, dock: dock)
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         log.info("copied diagnostics, \(text.count) characters")
     }
 
-    static func report(settings: Settings, statusItem: [String: Any]) -> String {
+    static func report(settings: Settings, statusItem: [String: Any], dock: [String: Any]?) -> String {
         let info = Bundle.main.infoDictionary ?? [:]
         let root: [String: Any] = [
             "appVersion": info["CFBundleShortVersionString"] as? String ?? SnowCore.version,
@@ -35,6 +36,7 @@ enum Diagnostics {
             "windows": windowInfo(),
             "coveredScreens": coveredScreens(),
             "dockPreferences": orNull(DockPreferences.read()?.description),
+            "dock": orNull(dock),
             "settings": settingsInfo(settings),
             "statusItem": statusItem,
         ]

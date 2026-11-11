@@ -39,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         self.overlay = overlay
 
+        AccessibilityAccess.startWatching()
         let tracker = WindowTracker()
         tracker.excludedWindowIDs = { [weak overlay] in
             overlay?.windowIDs ?? []
@@ -48,6 +49,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let menuBar = MenuBarController(settings: settings)
         self.menuBar = menuBar
+        menuBar.dockDiagnostics = { [weak tracker] in
+            tracker?.dockDiagnostics ?? [:]
+        }
         let controls = FallbackControls(settings: settings, menuBar: menuBar)
         self.controls = controls
         let dock = DockPresence(settings: settings)
