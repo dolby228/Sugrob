@@ -271,7 +271,17 @@ public final class SnowWorld {
 
     /// Mitten: removes snow under the circle on every drift; the snow is thrown sideways as clumps.
     public func sweep(at point: SIMD2<Float>, radius: Float) {
-        guard radius > 0 else { return }
+        sweep(at: point, radius: radius, direction: .zero)
+    }
+
+    /// Mitten moving in `direction` (any length; the cursor velocity works): the snow is
+    /// kicked mostly that way. A zero direction throws it to both sides.
+    public func sweep(at point: SIMD2<Float>, radius: Float, direction: SIMD2<Float>) {
+        guard radius > 0, radius.isFinite, point.x.isFinite, point.y.isFinite else { return }
+        let length = direction.x.isFinite && direction.y.isFinite
+            ? (direction.x * direction.x + direction.y * direction.y).squareRoot()
+            : 0
+        let heading: SIMD2<Float>? = length > 0.01 ? direction / length : nil
         for entry in entries {
             let r = entry.rect
             guard point.x + radius >= r.x, point.x - radius <= r.maxX,
@@ -284,6 +294,13 @@ public final class SnowWorld {
             emitPieces(amount: removed, maxPieces: 12, ignoring: entry.id) { rng in
                 let offset = rng.signedUnit() * spread
                 let x = max(r.x, min(r.maxX, point.x + offset))
+                if let heading {
+                    let side = SIMD2<Float>(-heading.y, heading.x) * (rng.signedUnit() * 45)
+                    let forward: SIMD2<Float> = heading * rng.float(in: 90...200)
+                    let lift = SIMD2<Float>(0, -rng.float(in: 30...90))
+                    let velocity: SIMD2<Float> = forward + side + lift
+                    return (SIMD2<Float>(x, topY), velocity)
+                }
                 let direction: Float = offset >= 0 ? 1 : -1
                 let velocity = SIMD2<Float>(direction * rng.float(in: 70...170), -rng.float(in: 40...130))
                 return (SIMD2<Float>(x, topY), velocity)
