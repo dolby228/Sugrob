@@ -111,6 +111,66 @@ export class Drift {
     return removed;
   }
 
+  /** Cells whose centre lies within `halfWidth` of local x, or null if none. */
+  private cellRange(x: number, halfWidth: number): [number, number] | null {
+    const from = Math.max(0, Math.ceil((x - halfWidth) / CELL - 0.5));
+    const to = Math.min(this.cells - 1, Math.floor((x + halfWidth) / CELL - 0.5));
+    return from <= to ? [from, to] : null;
+  }
+
+  /**
+   * Shaves up to `depth` px off the top of every cell within `halfWidth` of x,
+   * never more than `limit` in total. Returns the amount removed.
+   */
+  scrape(x: number, halfWidth: number, depth: number, limit = Infinity): number {
+    const range = this.cellRange(x, halfWidth);
+    if (!range || depth <= 0 || limit <= 0) return 0;
+    const h = this.heights;
+    let wanted = 0;
+    for (let i = range[0]; i <= range[1]; i++) wanted += Math.min(h[i]!, depth);
+    if (wanted <= 0) return 0;
+    const scale = Math.min(1, limit / wanted);
+    let removed = 0;
+    for (let i = range[0]; i <= range[1]; i++) {
+      const dh = Math.min(h[i]!, depth) * scale;
+      h[i] = h[i]! - dh;
+      removed += dh;
+    }
+    return removed;
+  }
+
+  /**
+   * Drops `amount` as a tall tent-shaped heap centred on x (steeper than the
+   * angle of repose, so it slumps afterwards), widening it where cells are full.
+   * Returns the amount accepted; the rest did not fit.
+   */
+  depositPile(x: number, amount: number, slope = 1.3): number {
+    if (!(amount > 0) || !Number.isFinite(x)) return 0;
+    const cx = Math.min(this.width, Math.max(0, x));
+    const h = this.heights;
+    // A tent of height slope*w over half-width w holds slope*w²/CELL units.
+    let halfWidth = Math.max(CELL * 1.5, Math.sqrt((amount * CELL) / slope));
+    let remaining = amount;
+    for (let pass = 0; pass < 10 && remaining > 1e-3; pass++, halfWidth *= 1.5) {
+      const range = this.cellRange(cx, halfWidth);
+      if (!range) continue;
+      let weights = 0;
+      for (let i = range[0]; i <= range[1]; i++) {
+        weights += Math.max(0, 1 - Math.abs((i + 0.5) * CELL - cx) / halfWidth);
+      }
+      if (weights <= 0) continue;
+      const per = remaining / weights;
+      for (let i = range[0]; i <= range[1]; i++) {
+        const w = Math.max(0, 1 - Math.abs((i + 0.5) * CELL - cx) / halfWidth);
+        const add = Math.min(per * w, MAX_HEIGHT - h[i]!);
+        if (add <= 0) continue;
+        h[i] = h[i]! + add;
+        remaining -= add;
+      }
+    }
+    return amount - Math.max(0, remaining);
+  }
+
   /** Removes a uniform fraction of all snow. Returns the amount removed. */
   shed(fraction: number): number {
     const h = this.heights;

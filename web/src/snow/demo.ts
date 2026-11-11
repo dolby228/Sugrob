@@ -14,6 +14,7 @@ export function createSnowDemo(root: HTMLElement, reducedMotion: boolean): void 
   const canvas = root.querySelector<HTMLCanvasElement>('.demo-canvas');
   const playBtn = root.querySelector<HTMLButtonElement>('.demo-play');
   const pauseBtn = root.querySelector<HTMLButtonElement>('.demo-pause');
+  const clearBtn = root.querySelector<HTMLButtonElement>('.demo-clear');
   const status = root.querySelector<HTMLElement>('[data-demo-status]');
   if (!canvas || !playBtn || !pauseBtn) return;
 
@@ -58,8 +59,20 @@ export function createSnowDemo(root: HTMLElement, reducedMotion: boolean): void 
   for (const r of radios('tool')) {
     r.addEventListener('change', () => {
       world.tool = r.value as Tool;
+      // Switching away from the shovel drops what it carries.
+      if (world.tool !== 'shovel' && world.shovelLoad > 0) {
+        world.dump(input.view.pointerX, input.view.pointerY, 0, 0);
+      }
+      input.refresh();
+      kick();
     });
   }
+
+  clearBtn?.addEventListener('click', () => {
+    world.clearAll();
+    announce('Снег убран');
+    kick();
+  });
 
   // ------------------------------------------------------------ pause/play
 

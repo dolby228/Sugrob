@@ -549,6 +549,13 @@ section {
   z-index: 1;
 }
 
+.demo-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
 .demo-pause[aria-pressed='true'] {
   border-color: var(--ice);
   color: var(--ice-strong);

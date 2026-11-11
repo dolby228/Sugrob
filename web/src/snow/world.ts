@@ -42,6 +42,31 @@ export const PUFF = 2;
 const MAX_PARTICLES = 1600;
 const GRAVITY = 900;
 
+/** Most snow the shovel carries, in drift units (px of height summed over cells). */
+export const SHOVEL_CAPACITY = 520;
+/** Half the shovel blade width, px. */
+export const SHOVEL_HALF_WIDTH = 14;
+const HEAP_GRAVITY = 1000;
+const HEAP_MAX_FALL = 900;
+const HEAP_MAX_THROW = 900;
+
+/** A shovel load thrown as one lump; lands as a pile or bursts at the bottom. */
+export interface Heap {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  amount: number;
+  r: number;
+  rot: number;
+  spin: number;
+  /** Fixed per heap so its lumps keep their shape in flight. */
+  seed: number;
+}
+
+/** Visual radius of a thrown load, px. */
+export const heapRadius = (amount: number): number => Math.min(16, 3 + Math.sqrt(Math.max(0, amount)) * 0.55);
+
 const INTENSITY: Record<Intensity, { count: number; speed: number; wind: number }> = {
   light: { count: 110, speed: 0.8, wind: 55 },
   steady: { count: 260, speed: 1, wind: 75 },
@@ -67,6 +92,10 @@ export class World {
   dock!: Surface;
   /** Snowballs and snowmen. */
   readonly yard = new Yard(this);
+  /** Snow riding on the shovel blade. */
+  shovelLoad = 0;
+  /** Thrown shovel loads in flight. */
+  readonly heaps: Heap[] = [];
 
   // Particle storage, struct-of-arrays.
   count = 0;
@@ -327,8 +356,93 @@ export class World {
     }
   }
 
-  /** Shovel: everything goes in one scoop. */
-  shovel(): void {
+  /**
+   * Front-most surface whose drift is under (x, y), within `tolerance` px of
+   * its top. A point inside a window body blocks the windows behind it.
+   */
+  driftAt(x: number, y: number, tolerance = 12): Surface | null {
+    const list = this.surfaces;
+    for (let k = list.length - 1; k >= 0; k--) {
+      const s = list[k]!;
+      const local = x - s.x;
+      if (local < 0 || local > s.w) continue;
+      const height = s.drift.heightAt(local);
+      const top = s.y - height;
+      if (y >= top - tolerance && y <= s.y + tolerance && height > 0.05) return s;
+      if (y > s.y && y < s.y + s.h) return null;
+    }
+    return null;
+  }
+
+  /** Shovel: scrapes up to `depth` px off the drift under the blade onto the shovel. */
+  scoop(x: number, y: number, depth: number): number {
+    const room = SHOVEL_CAPACITY - this.shovelLoad;
+    if (room <= 0.01) return 0;
+    const s = this.driftAt(x, y);
+    if (!s) return 0;
+    const taken = s.drift.scrape(x - s.x, SHOVEL_HALF_WIDTH, depth, room);
+    this.shovelLoad = Math.min(SHOVEL_CAPACITY, this.shovelLoad + taken);
+    // A little powder kicked up by the blade; cosmetic, carries no snow.
+    if (taken > 0.5 && Math.random() < Math.min(1, taken / 6)) {
+      this.spawnPuff(x + rand(-SHOVEL_HALF_WIDTH, SHOVEL_HALF_WIDTH), y - rand(2, 8), rand(-50, 50), rand(-120, -40));
+    }
+    return taken;
+  }
+
+  /** Throws the whole shovel load from (x, y) as one clump. */
+  dump(x: number, y: number, vx: number, vy: number): Heap | null {
+    const amount = this.shovelLoad;
+    this.shovelLoad = 0;
+    if (amount <= 0.01 || !Number.isFinite(x) || !Number.isFinite(y)) return null;
+
+    let tvx = Number.isFinite(vx) ? vx * 0.6 : 0;
+    let tvy = Number.isFinite(vy) ? vy * 0.6 : 0;
+    const speed = Math.hypot(tvx, tvy);
+    if (speed > HEAP_MAX_THROW) {
+      tvx *= HEAP_MAX_THROW / speed;
+      tvy *= HEAP_MAX_THROW / speed;
+    }
+
+    // Dumped right onto a bank: start just above its top so it lands there.
+    const r = heapRadius(amount);
+    let cy = y;
+    const list = this.surfaces;
+    for (let k = list.length - 1; k >= 0; k--) {
+      const s = list[k]!;
+      if (x < s.x || x > s.x + s.w) continue;
+      const top = s.y - s.drift.heightAt(x - s.x);
+      if (y >= top - r && y <= s.y + 12) {
+        cy = Math.min(y, top - r * 0.6 - 0.5);
+        break;
+      }
+      if (y > s.y && y < s.y + s.h) break;
+    }
+
+    const heap: Heap = {
+      x,
+      y: cy,
+      vx: tvx,
+      vy: tvy,
+      amount,
+      r,
+      rot: Math.random() * Math.PI * 2,
+      spin: rand(-3, 3),
+      seed: Math.floor(Math.random() * 1e9),
+    };
+    this.heaps.push(heap);
+    return heap;
+  }
+
+  /** Total snow lying in drifts, on the shovel and in flight as heaps. */
+  snowTotal(): number {
+    let sum = this.shovelLoad;
+    for (const s of this.surfaces) sum += s.drift.total();
+    for (const h of this.heaps) sum += h.amount;
+    return sum;
+  }
+
+  /** «Очистить»: wipes every drift, snowball and shovel load at once. */
+  clearAll(): void {
     for (const s of this.surfaces) {
       const h = s.drift.heights;
       // Roughly one puff of powder per 40 units of snow, at most ~90 per surface.
@@ -345,6 +459,11 @@ export class World {
       s.spillLeft = 0;
       s.spillRight = 0;
     }
+    for (const heap of this.heaps) {
+      for (let k = 0; k < 8; k++) this.spawnPuff(heap.x, heap.y, rand(-120, 120), rand(-260, -60));
+    }
+    this.heaps.length = 0;
+    this.shovelLoad = 0;
     this.yard.clear();
   }
 
@@ -360,6 +479,7 @@ export class World {
 
     this.updateSurfaces(dt);
     this.updateParticles(dt, windNow);
+    this.updateHeaps(dt);
     this.yard.step(dt);
 
     // Top up the snowfall gradually so intensity changes ease in.
@@ -398,6 +518,60 @@ export class World {
         this.spawnClump(s.x + s.w + 1, s.y - 2, rand(5, 30) + this.wind * 0.3, rand(-10, 20), 2.5);
       }
     }
+  }
+
+  private updateHeaps(dt: number): void {
+    const heaps = this.heaps;
+    for (let i = 0; i < heaps.length; i++) {
+      const c = heaps[i]!;
+      const prevBottom = c.y + c.r * 0.6;
+      c.vy = Math.min(HEAP_MAX_FALL, c.vy + HEAP_GRAVITY * dt);
+      c.vx *= Math.exp(-0.6 * dt);
+      c.x += c.vx * dt;
+      c.y += c.vy * dt;
+      c.rot += c.spin * dt;
+
+      let gone = c.vy > 0 && this.landHeap(c, prevBottom);
+      if (!gone && c.y + c.r * 0.6 >= this.height) {
+        this.burst(c.amount, c.x, Math.min(c.y, this.height - c.r * 0.5), c.r);
+        gone = true;
+      }
+      if (!gone && (c.x < -300 || c.x > this.width + 300)) gone = true;
+      if (gone) heaps.splice(i--, 1);
+    }
+  }
+
+  /** Adds the heap to the front-most drift it crosses as a tall pile. */
+  private landHeap(c: Heap, prevBottom: number): boolean {
+    const bottom = c.y + c.r * 0.6;
+    const list = this.surfaces;
+    for (let k = list.length - 1; k >= 0; k--) {
+      const s = list[k]!;
+      if (c.x < s.x || c.x > s.x + s.w) continue;
+      const local = c.x - s.x;
+      const top = s.y - s.drift.heightAt(local);
+      if (prevBottom <= top + 6 && bottom >= top) {
+        const accepted = s.drift.depositPile(local, c.amount);
+        const rest = c.amount - accepted;
+        // The drift is full there: the rest slides off as loose snow.
+        if (rest > 0.5) this.burst(rest, c.x, top - 2, c.r);
+        for (let p = 0; p < 6; p++) this.spawnPuff(c.x + rand(-c.r, c.r), top - rand(0, 4), rand(-90, 90), rand(-160, -40));
+        return true;
+      }
+      // Behind this window: surfaces further back are out of reach.
+      if (c.y > s.y && c.y < s.y + s.h) return false;
+    }
+    return false;
+  }
+
+  /** Breaks `amount` of snow into loose clumps and powder around (x, y). */
+  private burst(amount: number, x: number, y: number, r: number): void {
+    const spread = Math.max(2, r * 0.7);
+    const pieces = Math.max(1, Math.min(40, Math.ceil(amount / 2.5)));
+    for (let k = 0; k < pieces; k++) {
+      this.spawnClump(x + rand(-spread, spread), y + rand(-spread, spread) * 0.5, rand(-160, 160), -rand(60, 260), amount / pieces);
+    }
+    for (let k = 0; k < 10; k++) this.spawnPuff(x + rand(-spread, spread), y, rand(-140, 140), -rand(80, 300));
   }
 
   private shakeOff(s: Surface, frac: number): void {
