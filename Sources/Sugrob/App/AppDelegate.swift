@@ -39,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         self.overlay = overlay
 
+        AccessibilityAccess.startWatching()
         let tracker = WindowTracker()
         tracker.excludedWindowIDs = { [weak overlay] in
             overlay?.windowIDs ?? []

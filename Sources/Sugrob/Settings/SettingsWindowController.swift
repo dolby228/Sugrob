@@ -38,6 +38,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let loginCheckbox = NSButton(checkboxWithTitle: "Запускать при входе", target: nil, action: nil)
     private let dockCheckbox = NSButton(checkboxWithTitle: "Показывать иконку в Dock", target: nil, action: nil)
     private let copiedLabel = NSTextField(labelWithString: "")
+    private let accessibilityStatus = NSTextField(wrappingLabelWithString: "")
+    private let accessibilityButton = NSButton(title: "Разрешить…", target: nil, action: nil)
+    private let accessibilityHint = NSTextField(wrappingLabelWithString: "")
+    /// Re-checks the Accessibility state while the window is open.
+    private var accessibilityTimer: Timer?
+
+    static let accessibilityHintText =
+        "Без доступа ширина Dock оценивается приблизительно. После обновления Sugrob доступ нужно выдать заново: удалите старую запись Sugrob из списка и добавьте снова."
+    static let accessibilityPollInterval: TimeInterval = 2
 
     private static let toolHints: [Settings.Tool: String] = [
         .mitten: "Варежка: ведите курсором по сугробу, снег смахивается по ходу движения.",
@@ -68,6 +77,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             name: .sugrobLaunchAtLoginDidChange,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(accessibilityChanged(_:)),
+            name: .sugrobAccessibilityDidChange,
+            object: nil
+        )
     }
 
     @available(*, unavailable)
@@ -96,6 +111,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
         // An accessory app may be refused activation; the window must still come up.
         window.orderFrontRegardless()
+        startAccessibilityPolling()
         log.debug("settings window shown")
     }
 
@@ -104,6 +120,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        accessibilityTimer?.invalidate()
+        accessibilityTimer = nil
         messageLabel.isHidden = true
         messageLabel.stringValue = ""
     }
@@ -129,6 +147,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         loginCheckbox.action = #selector(loginChanged(_:))
         dockCheckbox.target = self
         dockCheckbox.action = #selector(dockChanged(_:))
+        accessibilityButton.target = self
+        accessibilityButton.action = #selector(requestAccessibility(_:))
+        accessibilityStatus.preferredMaxLayoutWidth = 300
+        accessibilityHint.stringValue = Self.accessibilityHintText
+        accessibilityHint.textColor = .secondaryLabelColor
+        accessibilityHint.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        accessibilityHint.preferredMaxLayoutWidth = 300
 
         for (index, preset) in Settings.windPresets.enumerated() {
             windControl.setToolTip(preset.title, forSegment: index)
@@ -150,6 +175,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             [label("Прочее:"), debugCheckbox],
             [NSGridCell.emptyContentView, loginCheckbox],
             [NSGridCell.emptyContentView, dockCheckbox],
+            [NSGridCell.emptyContentView, accessibilityStatus],
+            [NSGridCell.emptyContentView, accessibilityButton],
+            [NSGridCell.emptyContentView, accessibilityHint],
         ])
         grid.rowSpacing = 10
         grid.columnSpacing = 8
@@ -251,6 +279,31 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         loginCheckbox.state = LaunchAtLogin.isEnabled ? .on : .off
         dockCheckbox.state = settings.showInDock ? .on : .off
+        refreshAccessibility()
+    }
+
+    private func refreshAccessibility() {
+        let trusted = AccessibilityAccess.refresh()
+        let state = trusted ? "включено" : "нужен доступ к Универсальному доступу"
+        accessibilityStatus.stringValue = "Точный размер Dock: " + state
+        accessibilityButton.isEnabled = !trusted
+    }
+
+    private func startAccessibilityPolling() {
+        guard accessibilityTimer == nil else { return }
+        let timer = Timer(
+            timeInterval: Self.accessibilityPollInterval,
+            target: self,
+            selector: #selector(accessibilityTick(_:)),
+            userInfo: nil,
+            repeats: true
+        )
+        RunLoop.main.add(timer, forMode: .common)
+        accessibilityTimer = timer
+    }
+
+    @objc private func accessibilityTick(_ timer: Timer) {
+        refreshAccessibility()
     }
 
     // MARK: Actions
@@ -293,6 +346,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func launchAtLoginChanged(_ notification: Notification) {
         refresh()
+    }
+
+    @objc private func accessibilityChanged(_ notification: Notification) {
+        refreshAccessibility()
+    }
+
+    @objc private func requestAccessibility(_ sender: NSButton) {
+        AccessibilityAccess.request()
+        refreshAccessibility()
     }
 
     @objc private func copyDiagnostics(_ sender: NSButton) {

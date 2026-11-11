@@ -69,7 +69,7 @@ final class DockLocator {
     private var preferences: DockPreferences?
     /// Dock tile frames read via Accessibility, CG global.
     private(set) var accessibilityTiles: AccessibilityTiles?
-    private var observingWorkspace = false
+    private var observingChanges = false
     private var pendingRefreshes: [DispatchWorkItem] = []
     private var loggedDockWindows: [WindowListEntry] = []
     private var loggedSources: [Int: Source] = [:]
@@ -78,7 +78,7 @@ final class DockLocator {
     /// Dock frames for every screen where the Dock is shown. `list` is the raw window list,
     /// `windows` the ordinary (layer 0) windows front to back.
     func locate(in list: [WindowListEntry], windows: [TrackedWindow]) -> Result {
-        observeWorkspaceIfNeeded()
+        observeChangesIfNeeded()
         refreshSlowSources()
         let dockWindows = list.filter { isDockOwned($0) }
         logDockWindows(dockWindows)
@@ -351,15 +351,21 @@ final class DockLocator {
 
     /// Tiles appear and disappear as apps launch and quit; the Dock animates the change,
     /// so the frame is re-read shortly after and once more when the animation is over.
-    private func observeWorkspaceIfNeeded() {
-        guard !observingWorkspace else { return }
-        observingWorkspace = true
+    private func observeChangesIfNeeded() {
+        guard !observingChanges else { return }
+        observingChanges = true
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
                     self?.scheduleRefreshes()
                 }
+            }
+        }
+        // Access granted or revoked: switch sources on the next poll, no restart needed.
+        NotificationCenter.default.addObserver(forName: .sugrobAccessibilityDidChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.invalidateSlowSources()
             }
         }
     }
