@@ -12,6 +12,7 @@ concurrency:
 jobs:
   build:
     runs-on: macos-15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
 
@@ -23,6 +24,9 @@ jobs:
 
       - name: Test
         run: swift test
+
+      - name: Compile Metal shaders
+        run: ./scripts/check-shaders.sh
 
       - name: Bundle app
         run: ./scripts/bundle.sh
