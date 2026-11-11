@@ -141,6 +141,35 @@ public final class Drift {
         return removed * columnSpacing
     }
 
+    /// Packs snow into a snowball: removes `fraction` (0...1) of every column within
+    /// `halfWidth` of `localX`, never more than `limit` pt² in total. Returns removed pt².
+    @discardableResult
+    public func take(aroundX localX: Float, halfWidth: Float, fraction: Float, limit: Float = .infinity) -> Float {
+        let f = fraction.isFinite ? max(0, min(1, fraction)) : 0
+        guard f > 0, limit > 0, let range = columnRange(aroundX: localX, halfWidth: halfWidth) else { return 0 }
+        var wanted: Float = 0
+        for i in range { wanted += heights[i] * f }
+        guard wanted > 0 else { return 0 }
+        let scale = min(1, (limit / columnSpacing) / wanted)
+        var removed: Float = 0
+        for i in range {
+            let dh = min(heights[i], heights[i] * f * scale)
+            heights[i] -= dh
+            removed += dh
+        }
+        return removed * columnSpacing
+    }
+
+    /// Columns whose x lies within `halfWidth` of `localX`, or nil if none.
+    private func columnRange(aroundX localX: Float, halfWidth: Float) -> ClosedRange<Int>? {
+        guard localX.isFinite, halfWidth.isFinite, halfWidth > 0 else { return nil }
+        let n = heights.count
+        let loF = max(0, ((localX - halfWidth) / columnSpacing).rounded(.up))
+        let hiF = min(Float(n - 1), ((localX + halfWidth) / columnSpacing).rounded(.down))
+        guard loF <= hiF else { return nil }
+        return Int(loF)...Int(hiF)
+    }
+
     /// Removes `fraction` (0...1) of the snow in every column. Returns removed pt².
     @discardableResult
     public func remove(fraction: Float) -> Float {
