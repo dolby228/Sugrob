@@ -44,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             overlay?.windowIDs ?? []
         }
         self.tracker = tracker
+        Diagnostics.tracker = tracker
 
         let menuBar = MenuBarController(settings: settings)
         self.menuBar = menuBar
