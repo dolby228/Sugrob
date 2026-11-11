@@ -36,13 +36,42 @@ final class WindowTracker: NSObject {
     /// Owners whose near full-screen panels (Launchpad / Apps, Mission Control, Spotlight)
     /// hide all snow on that screen. The Dock itself is matched by pid as well.
     static let coveringPanelOwners: Set<String> = [DockLocator.ownerName, "Spotlight"]
+    /// Dock layers that hold its tiles and permanent transparent backdrops, never a panel.
+    static let ignoredDockCoverLayers = 18...20
+    /// A covering window must be at least this opaque.
+    static let minimumCoverAlpha = 0.5
+    /// Polls in a row a window must cover a screen before the snow there is hidden.
+    static let coverPolls = 2
+    /// A window that appears this soon after ⌥ changed (or while it is held) belongs to
+    /// a modifier gesture (window tiling and the like), not to a full-screen panel.
+    static let modifierGrace: TimeInterval = 0.5
+
+    /// The window that hides the snow on one display, for logs and diagnostics.
+    struct CoveringWindow: Equatable, Sendable {
+        let id: CGWindowID
+        let ownerName: String
+        let layer: Int
+        let alpha: Double
+        /// CG global coordinates.
+        let bounds: CGRect
+
+        var summary: String {
+            "\(id) \(ownerName) layer \(layer) alpha \(alpha) \(bounds)"
+        }
+    }
 
     private var timer: Timer?
     private var dockFrames: [Int: CGRect] = [:]
     /// System panels in front of all ordinary windows, front to back, CG global.
     private var occluders: [TrackedWindow] = []
-    /// Displays hidden behind a full-screen system panel.
-    private var coveredDisplays: Set<CGDirectDisplayID> = []
+    /// Displays hidden behind a full-screen system panel, with the window doing it.
+    private(set) var coveredDisplays: [CGDirectDisplayID: CoveringWindow] = [:]
+    /// Polls in a row each candidate window has covered a screen.
+    private var coverStreaks: [CGWindowID: Int] = [:]
+    /// Candidates that showed up with ⌥ and never count as panels.
+    private var modifierWindowIDs: Set<CGWindowID> = []
+    private var optionWasDown = false
+    private var lastOptionChange: TimeInterval = -.infinity
     private let dockLocator = DockLocator()
 
     init(interval: TimeInterval = 0.1) {
@@ -94,7 +123,7 @@ final class WindowTracker: NSObject {
         let panels = findOccluders(in: list, dockWindowIDs: dock.windowIDs)
         let panelsChanged = panels != occluders
 
-        let covered = findCoveredDisplays(in: list)
+        let covered = findCoveredDisplays(in: list, optionDown: NSEvent.modifierFlags.contains(.option))
         let coveredChanged = covered != coveredDisplays
 
         guard !events.isEmpty || orderChanged || docksChanged || panelsChanged || coveredChanged else { return }
@@ -115,8 +144,10 @@ final class WindowTracker: NSObject {
             log.debug("occluders: \(summary, privacy: .public)")
         }
         if coveredChanged {
-            let ids = covered.map { String($0) }.sorted().joined(separator: ", ")
-            log.debug("displays covered by a system panel: [\(ids, privacy: .public)]")
+            let summary = covered.sorted { $0.key < $1.key }
+                .map { "display \($0.key): \($0.value.summary)" }
+                .joined(separator: "; ")
+            log.info("displays covered by a system panel: [\(summary, privacy: .public)]")
         }
         onUpdate?(current, events)
     }
@@ -189,28 +220,68 @@ final class WindowTracker: NSObject {
     /// covers `screen`; the snow there should be hidden.
     func isCoveredByPanel(_ screen: NSScreen) -> Bool {
         guard let id = screen.displayID else { return false }
-        return coveredDisplays.contains(id)
+        return coveredDisplays[id] != nil
     }
 
-    /// Displays at least 90% covered by a visible Dock or Spotlight window above layer 0.
-    /// The Dock's own Dock-level windows are skipped: one of them is a permanent,
-    /// transparent full-screen window.
-    private func findCoveredDisplays(in list: [WindowListEntry]) -> Set<CGDirectDisplayID> {
+    /// Displays at least 90% covered by a full-screen Dock or Spotlight panel above layer 0
+    /// (Launchpad / Apps, Mission Control, Spotlight). Hiding all snow is drastic, so a
+    /// window must pass every check:
+    /// - owned by the Dock or Spotlight, between layer 0 and the overlay;
+    /// - not on the Dock's own layers 18…20: there it keeps transparent full-screen
+    ///   backdrops that come and go with gestures;
+    /// - reasonably opaque (alpha ≥ 0.5);
+    /// - not shown together with ⌥: macOS puts up full-screen helper windows for
+    ///   modifier gestures (window tiling and the like), which are not panels;
+    /// - covering the screen for `coverPolls` polls in a row, so a flash never hides snow.
+    private func findCoveredDisplays(in list: [WindowListEntry], optionDown: Bool) -> [CGDirectDisplayID: CoveringWindow] {
+        let now = ProcessInfo.processInfo.systemUptime
+        if optionDown != optionWasDown {
+            optionWasDown = optionDown
+            lastOptionChange = now
+        }
+        let modifierActive = optionDown || now - lastOptionChange < Self.modifierGrace
+
         let primaryHeight = Coordinates.primaryScreenHeight
-        var result: Set<CGDirectDisplayID> = []
+        let screens: [(id: CGDirectDisplayID, frame: CGRect)] = NSScreen.screens.compactMap { screen in
+            guard let id = screen.displayID else { return nil }
+            return (id, Coordinates.cgRect(fromCocoa: screen.frame, primaryHeight: primaryHeight))
+        }
+
+        var streaks: [CGWindowID: Int] = [:]
+        var modifierWindows: Set<CGWindowID> = []
+        var result: [CGDirectDisplayID: CoveringWindow] = [:]
         for entry in list {
-            guard entry.layer > 0, entry.layer < Self.overlayLayer, entry.alpha > 0 else { continue }
+            guard entry.layer > 0, entry.layer < Self.overlayLayer, entry.alpha >= Self.minimumCoverAlpha else { continue }
             let isDock = dockLocator.isDockOwned(entry)
             guard isDock || Self.coveringPanelOwners.contains(entry.ownerName) else { continue }
-            if isDock && entry.layer == DockLocator.dockLevel { continue }
-            for screen in NSScreen.screens {
-                guard let id = screen.displayID else { continue }
-                let screenCG = Coordinates.cgRect(fromCocoa: screen.frame, primaryHeight: primaryHeight)
-                if Self.coverage(of: entry.bounds, on: screenCG) >= Self.fullScreenCoverage {
-                    result.insert(id)
+            if isDock && Self.ignoredDockCoverLayers.contains(entry.layer) { continue }
+            let displays = screens.filter { Self.coverage(of: entry.bounds, on: $0.frame) >= Self.fullScreenCoverage }
+            guard !displays.isEmpty else { continue }
+
+            let known = modifierWindowIDs.contains(entry.id)
+            if known || (coverStreaks[entry.id] == nil && modifierActive) {
+                if !known {
+                    log.info("ignoring full-screen window shown with option: \(entry.id) \(entry.ownerName, privacy: .public) layer \(entry.layer) \(String(describing: entry.bounds), privacy: .public)")
                 }
+                modifierWindows.insert(entry.id)
+                continue
+            }
+            let streak = (coverStreaks[entry.id] ?? 0) + 1
+            streaks[entry.id] = streak
+            guard streak >= Self.coverPolls else { continue }
+            let window = CoveringWindow(
+                id: entry.id,
+                ownerName: entry.ownerName,
+                layer: entry.layer,
+                alpha: entry.alpha,
+                bounds: entry.bounds
+            )
+            for display in displays where result[display.id] == nil {
+                result[display.id] = window
             }
         }
+        coverStreaks = streaks
+        modifierWindowIDs = modifierWindows
         return result
     }
 
