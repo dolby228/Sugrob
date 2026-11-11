@@ -1,0 +1,17 @@
+{
+  "name": "sugrob-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Landing page for Sugrob with an interactive snow demo",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  }
+}
