@@ -121,6 +121,16 @@ final class SnowView: MTKView, OverlayContent {
         ))
     }
 
+    // MARK: Power
+
+    func applyPower(_ profile: PowerMonitor.Profile) {
+        world.particleBudgetScale = profile.budgetScale
+        framesPerSecond = profile.framesPerSecond
+        if preferredFramesPerSecond != profile.framesPerSecond {
+            preferredFramesPerSecond = profile.framesPerSecond
+        }
+    }
+
     // MARK: Debug outlines
 
     /// Keeps a `DebugOverlayView` on top of the snow while enabled.
