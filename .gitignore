@@ -1,0 +1,19 @@
+# SwiftPM / Xcode
+.build/
+.swiftpm/
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+
+# Build output
+dist/
+*.app
+
+# Web
+node_modules/
+web/dist/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
