@@ -23,6 +23,10 @@ final class SnowView: MTKView, OverlayContent {
     /// A full-screen system panel covers the screen; drawing stops, the world keeps its state.
     private var isCovered = false
 
+    /// Mouse events reaching this view while its overlay takes the mouse.
+    var onMouseEvent: (@MainActor (NSEvent) -> Void)?
+    private var trackingArea: NSTrackingArea?
+
     /// Longest simulated step; a stalled frame must not teleport flakes through drifts.
     static let maxStep: CFTimeInterval = 1.0 / 20.0
 
@@ -141,6 +145,39 @@ final class SnowView: MTKView, OverlayContent {
             width: Float(tracked.frame.width),
             height: Float(tracked.frame.height)
         ))
+    }
+
+    // MARK: Mouse capture
+
+    /// The overlay is never key; the first click must do its work right away.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override func mouseDown(with event: NSEvent) { onMouseEvent?(event) }
+    override func mouseDragged(with event: NSEvent) { onMouseEvent?(event) }
+    override func mouseUp(with event: NSEvent) { onMouseEvent?(event) }
+    override func mouseMoved(with event: NSEvent) { onMouseEvent?(event) }
+
+    /// Moves over a captured overlay reach the view even though its window is never key.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        guard trackingArea == nil else { return }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseMoved, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    /// True where the overlay must not take the mouse: the snow is hidden, the point is in
+    /// the menu bar, or a system panel lies above the drifts there. Screen-local y-down.
+    func blocksCapture(at point: CGPoint) -> Bool {
+        if isHidden { return true }
+        if point.y < CGFloat(renderer.menuBarInset) { return true }
+        return lastSurfaces.contains { $0.kind == .occluder && $0.frame.contains(point) }
     }
 
     // MARK: Power

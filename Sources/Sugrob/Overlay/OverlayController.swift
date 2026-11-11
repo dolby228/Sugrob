@@ -21,6 +21,8 @@ final class OverlayController: NSObject {
     private let makeContent: ContentFactory
     private var entries: [CGDirectDisplayID: Entry] = [:]
     private(set) var isPaused = false
+    /// Display whose overlay takes the mouse; every other overlay is click-through.
+    private(set) var captureDisplay: CGDirectDisplayID?
     private var isStarted = false
 
     init(makeContent: @escaping ContentFactory) {
@@ -67,6 +69,26 @@ final class OverlayController: NSObject {
         }
     }
 
+    /// Lets the overlay of `displayID` receive the mouse, or none for nil.
+    /// `ignoresMouseEvents` is always set explicitly: only the unset default hit-tests by
+    /// alpha, an explicit `false` takes clicks on fully transparent pixels too.
+    func setMouseCapture(displayID: CGDirectDisplayID?) {
+        guard displayID != captureDisplay else { return }
+        captureDisplay = displayID
+        applyMouseCapture()
+        if let displayID {
+            log.debug("overlay of display \(Int(displayID)) takes the mouse")
+        } else {
+            log.debug("overlays are click-through")
+        }
+    }
+
+    private func applyMouseCapture() {
+        for (id, entry) in entries {
+            entry.window.ignoresMouseEvents = id != captureDisplay
+        }
+    }
+
     @objc private func screenParametersDidChange(_ notification: Notification) {
         syncWindows()
         onScreensChanged?()
@@ -107,5 +129,9 @@ final class OverlayController: NSObject {
             entries[id] = nil
             log.debug("removed overlay for display \(Int(id))")
         }
+        if let captureDisplay, !seen.contains(captureDisplay) {
+            self.captureDisplay = nil
+        }
+        applyMouseCapture()
     }
 }

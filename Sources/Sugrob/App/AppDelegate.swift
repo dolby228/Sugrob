@@ -49,6 +49,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.snowWorlds() ?? []
         }
         self.mouse = mouse
+        mouse.onCaptureChange = { [weak self] screen in
+            self?.overlay?.setMouseCapture(displayID: screen?.displayID)
+        }
+        mouse.isCaptureBlocked = { [weak self] screen, point in
+            guard let view = self?.snowView(for: screen) else { return true }
+            return view.blocksCapture(at: CGPoint(x: CGFloat(point.x), y: CGFloat(point.y)))
+        }
 
         tracker.onUpdate = { [weak self] _, _ in
             self?.pushSurfaces()
@@ -97,6 +104,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let view = SnowView(frame: frame, pipelines: pipelines, settings: settings)
             view.applyPower(power?.profile ?? .normal)
             view.showsDebugOutlines = debugOutlinesEnabled
+            view.onMouseEvent = { [weak self] event in
+                self?.mouse?.receive(event)
+            }
             return view
         }
         let view = DebugOverlayView(frame: frame)
@@ -149,6 +159,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         return result
+    }
+
+    private func snowView(for screen: NSScreen) -> SnowView? {
+        guard let overlay, let id = screen.displayID else { return nil }
+        return overlay.contents.first { $0.screen.displayID == id }?.content as? SnowView
     }
 
     private func pushSurfaces() {
