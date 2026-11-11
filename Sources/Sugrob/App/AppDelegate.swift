@@ -88,7 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tracker.start()
         pushSurfaces()
         mouse.start()
-        controls?.start()
+        controls.start()
     }
 
     /// Opening Sugrob.app again while it runs: the status item may be hidden by the notch.
