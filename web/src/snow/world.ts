@@ -4,6 +4,7 @@
  * y grows downwards. Rendering and input live in their own modules.
  */
 import { Drift, CELL, type Spill } from './drift';
+import { Yard } from './snowman';
 
 export type Intensity = 'light' | 'steady' | 'blizzard';
 export type Tool = 'mitten' | 'shovel';
@@ -64,6 +65,8 @@ export class World {
 
   readonly windows: Surface[] = [];
   dock!: Surface;
+  /** Snowballs and snowmen. */
+  readonly yard = new Yard(this);
 
   // Particle storage, struct-of-arrays.
   count = 0;
@@ -342,6 +345,7 @@ export class World {
       s.spillLeft = 0;
       s.spillRight = 0;
     }
+    this.yard.clear();
   }
 
   // -------------------------------------------------------------------- step
@@ -356,6 +360,7 @@ export class World {
 
     this.updateSurfaces(dt);
     this.updateParticles(dt, windNow);
+    this.yard.step(dt);
 
     // Top up the snowfall gradually so intensity changes ease in.
     const want = this.targetFlakes();
@@ -371,6 +376,7 @@ export class World {
         const rate = Math.min(7, (s.shake - 650) / 700);
         const frac = 1 - Math.exp(-rate * dt);
         this.shakeOff(s, frac);
+        if (s.shake > 1500) this.yard.topple(s);
       }
       const damp = Math.exp(-dt * 10);
       s.vx *= damp;

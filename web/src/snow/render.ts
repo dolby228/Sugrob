@@ -1,5 +1,6 @@
 /** Canvas 2D renderer for the snow demo. */
 import { CELL } from './drift';
+import { SNOWMAN_BALLS, type PlacedBall } from './snowman';
 import { CLUMP, FLAKE, MENU_BAR, PUFF, TITLE_BAR, type Surface, type World } from './world';
 
 export interface ViewState {
@@ -218,9 +219,11 @@ export class Renderer {
       if (s.kind === 'dock') this.drawDock(s);
       else this.drawWindow(s);
       this.drawDrift(s);
+      this.drawYard(world, s);
     }
 
     this.drawParticles(world);
+    for (const b of world.yard.balls) if (!b.surface) this.drawBall(b);
     this.drawCursor(view);
   }
 
@@ -416,6 +419,104 @@ export class Renderer {
     ctx.fill();
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
     ctx.lineWidth = 0.8;
+    ctx.stroke();
+  }
+
+  /** Stacks and rolled balls resting on this surface, so windows in front hide them. */
+  private drawYard(world: World, s: Surface): void {
+    const yard = world.yard;
+    for (const stack of yard.stacks) {
+      if (stack.surface !== s) continue;
+      const placed = yard.place(stack);
+      this.drawContactShadow(placed[0]!);
+      for (const b of placed) this.drawBall(b);
+      if (placed.length >= SNOWMAN_BALLS) this.drawSnowmanFace(placed);
+    }
+    for (const b of yard.balls) if (b.surface === s) this.drawBall(b);
+  }
+
+  private drawContactShadow(b: PlacedBall): void {
+    const ctx = this.ctx;
+    ctx.fillStyle = 'rgba(40, 60, 110, 0.25)';
+    ctx.beginPath();
+    ctx.ellipse(b.x, b.y + b.r * 0.92, b.r * 0.9, b.r * 0.18, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  private drawBall(b: PlacedBall): void {
+    const ctx = this.ctx;
+    const g = ctx.createRadialGradient(b.x - b.r * 0.35, b.y - b.r * 0.4, b.r * 0.1, b.x, b.y, b.r);
+    g.addColorStop(0, '#ffffff');
+    g.addColorStop(0.65, '#eef4ff');
+    g.addColorStop(1, '#b9cbe8');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fill();
+
+    // A few packed-snow marks that turn as the ball rolls.
+    ctx.fillStyle = 'rgba(150, 175, 220, 0.35)';
+    for (let k = 0; k < 3; k++) {
+      const a = b.angle + (k * Math.PI * 2) / 3;
+      const d = b.r * 0.55;
+      ctx.beginPath();
+      ctx.arc(b.x + Math.cos(a) * d, b.y + Math.sin(a) * d, Math.max(0.8, b.r * 0.1), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  private drawSnowmanFace(placed: PlacedBall[]): void {
+    const ctx = this.ctx;
+    const head = placed[placed.length - 1]!;
+    const body = placed[placed.length - 2]!;
+    const r = head.r;
+
+    // Eyes.
+    ctx.fillStyle = '#1b2240';
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.arc(head.x + side * r * 0.32, head.y - r * 0.18, Math.max(1.1, r * 0.11), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Carrot nose, pointing slightly to the right.
+    ctx.fillStyle = '#ff8a2a';
+    ctx.beginPath();
+    ctx.moveTo(head.x, head.y + r * 0.02 - r * 0.12);
+    ctx.lineTo(head.x + r * 0.95, head.y + r * 0.1);
+    ctx.lineTo(head.x, head.y + r * 0.02 + r * 0.12);
+    ctx.closePath();
+    ctx.fill();
+
+    // Smile.
+    ctx.fillStyle = '#1b2240';
+    for (let k = -2; k <= 2; k++) {
+      const a = Math.PI / 2 + k * 0.32;
+      ctx.beginPath();
+      ctx.arc(head.x + Math.cos(a) * r * 0.55, head.y + Math.sin(a) * r * 0.5, Math.max(0.7, r * 0.06), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Buttons and stick arms on the middle ball.
+    for (let k = -1; k <= 1; k++) {
+      ctx.beginPath();
+      ctx.arc(body.x, body.y + k * body.r * 0.38, Math.max(1, body.r * 0.09), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.strokeStyle = '#6b4a2f';
+    ctx.lineWidth = Math.max(1.2, body.r * 0.08);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (const side of [-1, 1]) {
+      const sx = body.x + side * body.r * 0.85;
+      const sy = body.y - body.r * 0.15;
+      const ex = sx + side * body.r * 0.9;
+      const ey = sy - body.r * 0.55;
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(ex, ey);
+      ctx.moveTo(sx + side * body.r * 0.55, sy - body.r * 0.33);
+      ctx.lineTo(sx + side * body.r * 0.6, sy - body.r * 0.7);
+    }
     ctx.stroke();
   }
 

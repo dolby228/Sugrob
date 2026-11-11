@@ -1,5 +1,6 @@
 /** Pointer and keyboard handling for the snow demo canvas. */
 import type { ViewState } from './render';
+import type { Ball } from './snowman';
 import type { Intensity, Surface, WindDir, World } from './world';
 
 export interface InputCallbacks {
@@ -10,7 +11,13 @@ export interface InputCallbacks {
 type Mode =
   | { kind: 'idle' }
   | { kind: 'drag'; surface: Surface; offX: number; offY: number; t: number }
-  | { kind: 'mitten' };
+  | { kind: 'mitten' }
+  | { kind: 'ball'; ball: Ball }
+  /** Touch press waiting to become either a sweep or a snowball. */
+  | { kind: 'pending'; x: number; y: number; timer: number };
+
+/** Hold time on a drift before a touch starts a snowball, ms. */
+const LONG_PRESS = 380;
 
 const LEVELS: Intensity[] = ['light', 'steady', 'blizzard'];
 
@@ -80,12 +87,30 @@ export class Input {
     const win = this.world.windowAt(x, y);
     if (win) this.world.bringToFront(win);
 
+    if (e.altKey && this.running && this.startBall(x, y)) {
+      this.updateCursor(x, y);
+      return;
+    }
+
     if (this.world.tool === 'shovel') {
       if (this.running) this.world.shovel();
+    } else if (e.pointerType !== 'mouse' && this.running) {
+      const timer = window.setTimeout(() => {
+        if (this.mode.kind !== 'pending') return;
+        if (!this.startBall(this.mode.x, this.mode.y)) this.mode = { kind: 'mitten' };
+      }, LONG_PRESS);
+      this.mode = { kind: 'pending', x, y, timer };
     } else {
       this.mode = { kind: 'mitten' };
     }
     this.updateCursor(x, y);
+  }
+
+  private startBall(x: number, y: number): boolean {
+    const ball = this.world.yard.start(x, y);
+    if (!ball) return false;
+    this.mode = { kind: 'ball', ball };
+    return true;
   }
 
   private move(e: PointerEvent): void {
@@ -97,12 +122,20 @@ export class Input {
       const dt = Math.max(0.001, (e.timeStamp - m.t) / 1000);
       m.t = e.timeStamp;
       this.world.moveSurface(m.surface, x - m.offX, y - m.offY, dt);
+    } else if (m.kind === 'ball') {
+      this.world.yard.roll(m.ball, x, y);
+    } else if (m.kind === 'pending' && Math.hypot(x - m.x, y - m.y) > 8) {
+      window.clearTimeout(m.timer);
+      this.mode = { kind: 'mitten' };
     }
     this.updateCursor(x, y);
   }
 
   private up(e: PointerEvent): void {
     if (this.canvas.hasPointerCapture(e.pointerId)) this.canvas.releasePointerCapture(e.pointerId);
+    const m = this.mode;
+    if (m.kind === 'ball') this.world.yard.release(m.ball, this.velX, this.velY);
+    if (m.kind === 'pending') window.clearTimeout(m.timer);
     this.mode = { kind: 'idle' };
     this.view.pointerDown = false;
     if (e.pointerType !== 'mouse') this.view.pointerInside = false;
@@ -133,7 +166,7 @@ export class Input {
   private updateCursor(x: number, y: number): void {
     const mitten = this.world.tool === 'mitten';
     let cursor = 'default';
-    if (this.mode.kind === 'drag') cursor = 'grabbing';
+    if (this.mode.kind === 'drag' || this.mode.kind === 'ball') cursor = 'grabbing';
     else if (this.world.titleBarAt(x, y)) cursor = 'grab';
     else if (mitten) cursor = this.pointerType === 'mouse' ? 'none' : 'default';
     else cursor = 'pointer';
