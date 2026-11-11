@@ -160,6 +160,58 @@ public final class Drift {
         return removed * columnSpacing
     }
 
+    /// Shovel blade: shaves the top `depth` points off every column within `halfWidth`
+    /// of `localX` (top layers first), never more than `limit` pt². Returns removed pt².
+    @discardableResult
+    public func scrape(aroundX localX: Float, halfWidth: Float, depth: Float, limit: Float = .infinity) -> Float {
+        guard depth > 0, depth.isFinite, limit > 0,
+              let range = columnRange(aroundX: localX, halfWidth: halfWidth)
+        else { return 0 }
+        var wanted: Float = 0
+        for i in range { wanted += min(heights[i], depth) }
+        guard wanted > 0 else { return 0 }
+        let scale = min(1, (limit / columnSpacing) / wanted)
+        var removed: Float = 0
+        for i in range {
+            let dh = min(heights[i], min(heights[i], depth) * scale)
+            heights[i] -= dh
+            removed += dh
+        }
+        return removed * columnSpacing
+    }
+
+    /// Drops `amount` pt² as a tall heap centred on `localX` (a tent roughly `slope` times
+    /// as high as it is half wide), widening it where columns are full or off the edge.
+    /// The heap then relaxes through `settle`. Returns the accepted pt².
+    @discardableResult
+    public func depositPile(atX localX: Float, amount: Float, slope: Float = 1.2) -> Float {
+        guard amount > 0, amount.isFinite, localX.isFinite else { return 0 }
+        let cx = max(0, min(width, localX))
+        let k = slope.isFinite ? max(0.1, slope) : 1.2
+        var halfWidth = max(columnSpacing * 1.5, (amount / k).squareRoot())
+        var remaining = amount
+        var accepted: Float = 0
+        for _ in 0..<10 {
+            guard remaining > 1e-3 else { break }
+            defer { halfWidth *= 1.5 }
+            guard let range = columnRange(aroundX: cx, halfWidth: halfWidth) else { continue }
+            var total: Float = 0
+            for i in range {
+                total += max(0, 1 - abs(columnX(i) - cx) / halfWidth)
+            }
+            guard total > 0 else { continue }
+            let dh = remaining / columnSpacing / total
+            var got: Float = 0
+            for i in range {
+                let w = max(0, 1 - abs(columnX(i) - cx) / halfWidth)
+                if w > 0 { got += add(dh * w, at: i) }
+            }
+            remaining -= got * columnSpacing
+            accepted += got * columnSpacing
+        }
+        return accepted
+    }
+
     /// Columns whose x lies within `halfWidth` of `localX`, or nil if none.
     private func columnRange(aroundX localX: Float, halfWidth: Float) -> ClosedRange<Int>? {
         guard localX.isFinite, halfWidth.isFinite, halfWidth > 0 else { return nil }

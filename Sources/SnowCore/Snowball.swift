@@ -105,3 +105,32 @@ public struct Snowman: Equatable, Sendable {
         Float.pi * (bottomRadius * bottomRadius + middleRadius * middleRadius + headRadius * headRadius)
     }
 }
+
+/// A shovel load in flight: one compact lump of snow that falls under gravity and is
+/// added to the drift it lands on as a tall pile.
+public struct SnowClump: Equatable, Sendable {
+    public let id: Int
+    public internal(set) var center: SIMD2<Float>
+    public internal(set) var velocity: SIMD2<Float>
+    /// Snow carried, in pt².
+    public internal(set) var amount: Float
+    /// Radians; also seeds the lumpy outline.
+    public internal(set) var rotation: Float
+    public internal(set) var spin: Float
+
+    init(id: Int, center: SIMD2<Float>, velocity: SIMD2<Float>, amount: Float, rotation: Float, spin: Float) {
+        self.id = id
+        self.center = center
+        self.velocity = velocity
+        self.amount = amount
+        self.rotation = rotation
+        self.spin = spin
+    }
+
+    /// Radius of a disc holding `amount`.
+    public var radius: Float { SnowClump.radius(forAmount: amount) }
+
+    public static func radius(forAmount amount: Float) -> Float {
+        (max(0, amount) / Float.pi).squareRoot()
+    }
+}

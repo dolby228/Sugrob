@@ -39,6 +39,12 @@ public final class SnowWorld {
     public internal(set) var snowballs: [Snowball] = []
     /// Finished snowmen standing on surfaces.
     public internal(set) var snowmen: [Snowman] = []
+    /// Dumped shovel loads in flight (see `SnowWorld+Shovel`).
+    public internal(set) var clumps: [SnowClump] = []
+    /// Snow carried on the shovel, in pt².
+    public internal(set) var shovelLoad: Float = 0
+    /// Where the shovel blade is drawn; nil hides it. Set by the input layer.
+    public var shovelPosition: SIMD2<Float>?
     var nextObjectID = 1
 
     struct Entry {
@@ -165,6 +171,7 @@ public final class SnowWorld {
         integrate(dt: dt)
         settleDrifts()
         stepSnowObjects(dt: dt)
+        stepClumps(dt: dt)
     }
 
     private func spawn(dt: Float) {
@@ -326,13 +333,15 @@ public final class SnowWorld {
         }
     }
 
-    /// «Очистить сугробы»: removes all lying snow, falling flakes, snowballs and snowmen.
-    /// Snowfall continues.
+    /// «Очистить сугробы»: removes all lying snow, falling flakes, snowballs, snowmen,
+    /// dumped clumps and the shovel load. Snowfall continues.
     public func clearAll() {
         for entry in entries { entry.drift.clear() }
         flakes.removeAll(keepingCapacity: true)
         snowballs.removeAll()
         snowmen.removeAll()
+        clumps.removeAll()
+        shovelLoad = 0
         spawnAccumulator = 0
     }
 
