@@ -57,7 +57,7 @@ enum AccessibilityAccess {
                 for delay in recheckDelays {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                         MainActor.assumeIsolated {
-                            refresh()
+                            _ = refresh()
                         }
                     }
                 }
