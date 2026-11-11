@@ -1,0 +1,32 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Test
+        run: swift test
+
+      - name: Compile Metal shaders
+        run: ./scripts/check-shaders.sh
+
+      - name: Bundle app
+        run: VERSION="${GITHUB_REF_NAME#v}" ./scripts/bundle.sh
+
+      - name: Zip app
+        run: ditto -c -k --keepParent dist/Sugrob.app dist/Sugrob.zip
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/Sugrob.zip --title "Sugrob $GITHUB_REF_NAME" --generate-notes
