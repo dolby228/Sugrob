@@ -98,7 +98,8 @@ final class SnowView: MTKView, OverlayContent {
         syncWorldBounds(screen.frame.size)
         if surfaces != lastSurfaces {
             lastSurfaces = surfaces
-            world.setSurfaces(surfaces.map(Self.surface(from:)))
+            // Occluders never carry snow; the renderer only uses them to hide drifts.
+            world.setSurfaces(surfaces.filter { $0.kind != .occluder }.map(Self.surface(from:)))
         }
         debugView?.update(surfaces: surfaces, screen: screen)
     }

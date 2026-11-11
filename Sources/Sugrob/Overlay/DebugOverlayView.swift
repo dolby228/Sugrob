@@ -2,7 +2,8 @@ import AppKit
 
 /// Outline overlay: a subview of `SnowView` in debug mode, or the whole overlay content
 /// when Metal is unavailable. Draws nothing unless outlines are enabled; then strokes the top edge of every tracked
-/// window and the Dock area in red, which makes coordinate bugs obvious.
+/// window in red, the Dock area in cyan and occluding system panels in yellow, which makes
+/// coordinate bugs obvious.
 @MainActor
 final class DebugOverlayView: NSView, OverlayContent {
     /// `SUGROB_DEBUG_WINDOWS=1` forces outlines on regardless of the menu toggle.
@@ -29,11 +30,11 @@ final class DebugOverlayView: NSView, OverlayContent {
 
     override func draw(_ dirtyRect: NSRect) {
         guard showsOutlines else { return }
-        NSColor.systemRed.setStroke()
 
         for surface in surfaces {
             switch surface.kind {
             case .window:
+                NSColor.systemRed.setStroke()
                 let frame = surface.frame
                 let edge = NSBezierPath()
                 edge.lineWidth = 3
@@ -46,6 +47,12 @@ final class DebugOverlayView: NSView, OverlayContent {
                 outline.setLineDash([4, 4], count: 2, phase: 0)
                 outline.stroke()
             case .dock:
+                NSColor.systemCyan.setStroke()
+                let outline = NSBezierPath(rect: surface.frame.insetBy(dx: 1, dy: 1))
+                outline.lineWidth = 2
+                outline.stroke()
+            case .occluder:
+                NSColor.systemYellow.setStroke()
                 let outline = NSBezierPath(rect: surface.frame.insetBy(dx: 1, dy: 1))
                 outline.lineWidth = 2
                 outline.stroke()

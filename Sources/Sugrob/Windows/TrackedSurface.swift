@@ -36,9 +36,11 @@ struct TrackedSurface: Equatable, Sendable {
     enum Kind: Equatable, Sendable {
         case window
         case dock
+        /// A system panel above all windows: never carries snow, only hides what is behind it.
+        case occluder
     }
 
-    /// Window surfaces use their `CGWindowID`; the Dock uses a negative synthetic id.
+    /// Window and occluder surfaces use their `CGWindowID`; the Dock uses a negative synthetic id.
     let id: Int
     /// Screen-local coordinates: origin top-left of the screen, y grows down (SnowCore space).
     let frame: CGRect
