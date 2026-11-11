@@ -29,6 +29,7 @@ enum Diagnostics {
             "axIsProcessTrusted": AXIsProcessTrusted(),
             "screens": NSScreen.screens.enumerated().map { screenInfo(index: $0.offset, screen: $0.element) },
             "windows": windowInfo(),
+            "dockPreferences": orNull(DockPreferences.read()?.description),
             "settings": settingsInfo(settings),
             "statusItem": statusItem,
         ]
@@ -67,7 +68,14 @@ enum Diagnostics {
             "auxiliaryTopLeftArea": rect(screen.auxiliaryTopLeftArea),
             "auxiliaryTopRightArea": rect(screen.auxiliaryTopRightArea),
             "backingScaleFactor": Double(screen.backingScaleFactor),
+            "dockReservedStrip": dockStrip(for: screen),
         ]
+    }
+
+    /// The strip `DockLocator` derives from `visibleFrame` (screen-local, y down).
+    private static func dockStrip(for screen: NSScreen) -> Any {
+        guard let found = DockLocator.reservedStrip(for: screen) else { return NSNull() }
+        return ["rect": rect(found.0), "edge": String(describing: found.1)]
     }
 
     /// Raw `CGWindowListCopyWindowInfo` entries without window names.
