@@ -24,6 +24,9 @@ jobs:
       - name: Test
         run: swift test
 
+      - name: Compile Metal shaders
+        run: ./scripts/check-shaders.sh
+
       - name: Bundle app
         run: ./scripts/bundle.sh
 
