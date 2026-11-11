@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#070d1f" />
+    <title>Sugrob — снег на рабочем столе Mac</title>
+    <meta
+      name="description"
+      content="Sugrob — бесплатное приложение для macOS: снег идёт поверх рабочего стола и копится сугробами на окнах и Dock. Клики проходят насквозь."
+    />
+    <meta property="og:title" content="Sugrob — снег на рабочем столе Mac" />
+    <meta
+      property="og:description"
+      content="Снегопад поверх всех окон, сугробы на Dock и снеговик на окне. Бесплатно и с открытым кодом."
+    />
+    <meta property="og:type" content="website" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Перейти к содержимому</a>
+
+    <header class="site-header">
+      <div class="container header-inner">
+        <a class="logo" href="#top" aria-label="Sugrob — на главную">
+          <svg class="logo-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+            <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <path d="M16 3.5v12M10.8 6.5l10.4 6M10.8 12.5l10.4-6" />
+              <path d="M14 4.6l2 1.6 2-1.6M14 14.4l2-1.6 2 1.6" />
+            </g>
+            <path
+              class="logo-drift"
+              d="M2 28c2.6-4.6 6.6-6.6 10.4-5.4 2.6-3.2 9-3.8 13 -.4 1.6 1.4 2.8 3.3 3.6 5.8z"
+            />
+          </svg>
+          <span class="logo-word">Sugrob</span>
+        </a>
+
+        <nav class="site-nav" aria-label="Основная навигация">
+          <ul>
+            <li><a href="#features">Возможности</a></li>
+            <li><a href="#how">Как это работает</a></li>
+            <li><a href="#faq">Вопросы</a></li>
+          </ul>
+        </nav>
+
+        <a class="btn btn-small btn-primary" href="https://github.com/dolby228/Sugrob/releases/latest">
+          Скачать
+        </a>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top" aria-labelledby="hero-title">
+        <canvas class="hero-snow" aria-hidden="true"></canvas>
+        <div class="container hero-inner">
+          <p class="eyebrow">Приложение для macOS</p>
+          <h1 id="hero-title">Зима прямо<br />на&nbsp;рабочем столе</h1>
+          <p class="hero-sub">
+            Sugrob запускает тихий снегопад поверх всех окон. Снежинки оседают пушистыми
+            сугробами на&nbsp;крышах окон и&nbsp;на&nbsp;Dock, а&nbsp;вы спокойно работаете:
+            снег не&nbsp;мешает ни&nbsp;одному клику.
+          </p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="https://github.com/dolby228/Sugrob/releases/latest">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M12 3v12m0 0l-5-5m5 5l5-5M4 19h16" />
+              </svg>
+              Скачать для macOS
+            </a>
+            <a class="btn btn-ghost" href="https://github.com/dolby228/Sugrob">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14" />
+              </svg>
+              Исходный код
+            </a>
+          </div>
+          <p class="hero-note">macOS 13+ · Apple Silicon и Intel · бесплатно и с открытым кодом</p>
+        </div>
+      </section>
+
+      <section class="demo-section" id="demo" aria-labelledby="demo-title">
+        <div class="container">
+          <div class="section-head">
+            <h2 id="demo-title">Потрогайте снег</h2>
+            <p>
+              Это маленькая копия того, что Sugrob делает на настоящем Mac. Перетаскивайте окна
+              за заголовок, смахивайте сугробы варежкой, а с зажатым <kbd>Alt</kbd> катите по
+              сугробу снежок. Три снежка друг на друге — и на окне появится снеговик.
+            </p>
+          </div>
+
+          <div class="demo" data-demo>
+            <div class="demo-stage">
+              <canvas
+                class="demo-canvas"
+                tabindex="0"
+                aria-label="Интерактивная демонстрация снегопада на рабочем столе"
+                aria-describedby="demo-help"
+              ></canvas>
+              <button class="demo-play" type="button" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 5l11 7-11 7z" /></svg>
+                Запустить снег
+              </button>
+            </div>
+
+            <div class="demo-controls" role="group" aria-label="Управление демо">
+              <fieldset class="segmented">
+                <legend>Снегопад</legend>
+                <label><input type="radio" name="intensity" value="light" /><span>Лёгкий</span></label>
+                <label><input type="radio" name="intensity" value="steady" checked /><span>Ровный</span></label>
+                <label><input type="radio" name="intensity" value="blizzard" /><span>Метель</span></label>
+              </fieldset>
+
+              <fieldset class="segmented">
+                <legend>Ветер</legend>
+                <label><input type="radio" name="wind" value="0" checked /><span>Штиль</span></label>
+                <label>
+                  <input type="radio" name="wind" value="-1" aria-label="Ветер влево" /><span aria-hidden="true">←</span>
+                </label>
+                <label>
+                  <input type="radio" name="wind" value="1" aria-label="Ветер вправо" /><span aria-hidden="true">→</span>
+                </label>
+              </fieldset>
+
+              <fieldset class="segmented">
+                <legend>Инструмент</legend>
+                <label><input type="radio" name="tool" value="mitten" checked /><span>Варежка</span></label>
+                <label><input type="radio" name="tool" value="shovel" /><span>Лопата</span></label>
+              </fieldset>
+
+              <button class="btn btn-ghost btn-small demo-pause" type="button" aria-pressed="false">
+                Пауза
+              </button>
+            </div>
+
+            <p class="demo-help" id="demo-help">
+              Варежка: зажмите кнопку мыши и ведите по сугробу. Лопата: один клик убирает весь
+              снег. <kbd>Alt</kbd> + перетаскивание по сугробу катит снежок, отпустите его над
+              другим снежком, чтобы собрать снеговика. На сенсорном экране задержите палец на
+              сугробе. С клавиатуры: <kbd>←</kbd> <kbd>→</kbd> меняют ветер, <kbd>↑</kbd>
+              <kbd>↓</kbd> силу снегопада, <kbd>Пробел</kbd> делает штиль.
+            </p>
+            <p class="visually-hidden" aria-live="polite" data-demo-status></p>
+          </div>
+        </div>
+      </section>
+
+      <section class="features" id="features" aria-labelledby="features-title">
+        <div class="container">
+          <div class="section-head">
+            <h2 id="features-title">Возможности</h2>
+            <p>Небольшое приложение с одной задачей: сделать зиму на экране уютной и не мешать работать.</p>
+          </div>
+          <ul class="feature-grid">
+            <li class="card">
+              <svg class="card-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <rect x="3" y="8" width="18" height="12" rx="2" /><path d="M3 9c2-3 5-3 7-2s5 1 7-1 3-1 4 0" />
+              </svg>
+              <h3>Сугробы на окнах</h3>
+              <p>Снег оседает на верхних кромках окон и на Dock. Резко сдвиньте окно, и сугроб осыплется.</p>
+            </li>
+            <li class="card">
+              <svg class="card-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M7 21v-8a3 3 0 0 1 3-3h0V6a2 2 0 0 1 4 0v4h1a3 3 0 0 1 3 3v8z" /><path d="M7 15H5a2 2 0 0 1 0-4h2" />
+              </svg>
+              <h3>Варежка и лопата</h3>
+              <p>Смахните часть сугроба курсором или уберите весь снег одним движением.</p>
+            </li>
+            <li class="card">
+              <svg class="card-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <circle cx="12" cy="17" r="5" /><circle cx="12" cy="8.5" r="3.5" /><path d="M12 9l3 .6" />
+              </svg>
+              <h3>Снеговик на окне</h3>
+              <p>Скатайте снежки прямо из сугробов и поставьте их друг на друга. Остальное он сделает сам.</p>
+            </li>
+            <li class="card">
+              <svg class="card-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M5 3l5 15 2.5-6.5L19 9z" /><path d="M13 13l6 6" />
+              </svg>
+              <h3>Клики проходят насквозь</h3>
+              <p>Снег живёт в прозрачном слое. Кнопки, текст и меню под ним работают как обычно.</p>
+            </li>
+            <li class="card">
+              <svg class="card-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M3 8h11a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h7" />
+              </svg>
+              <h3>Погода на выбор</h3>
+              <p>Лёгкий снег, ровный снегопад или метель. Ветер можно направить влево или вправо.</p>
+            </li>
+            <li class="card">
+              <svg class="card-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M13 3L5 14h6l-1 7 8-11h-6z" />
+              </svg>
+              <h3>Бережёт батарею</h3>
+              <p>Рисует через Metal на видеокарте и засыпает, когда снег на паузе.</p>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="how" id="how" aria-labelledby="how-title">
+        <div class="container">
+          <div class="section-head">
+            <h2 id="how-title">Как это работает</h2>
+            <p>Три шага, и за окном (то есть на окнах) начинается зима.</p>
+          </div>
+          <ol class="steps">
+            <li class="step">
+              <span class="step-num" aria-hidden="true">1</span>
+              <h3>Скачайте</h3>
+              <p>
+                Возьмите свежий архив на странице
+                <a href="https://github.com/dolby228/Sugrob/releases/latest">релизов</a> и перетащите
+                Sugrob в папку «Программы».
+              </p>
+            </li>
+            <li class="step">
+              <span class="step-num" aria-hidden="true">2</span>
+              <h3>Откройте</h3>
+              <p>
+                При первом запуске нажмите на значок правой кнопкой и выберите «Открыть»: так macOS
+                пропустит приложение без подписи из App Store.
+              </p>
+            </li>
+            <li class="step">
+              <span class="step-num" aria-hidden="true">3</span>
+              <h3>Снег идёт</h3>
+              <p>
+                В строке меню появится снежинка. Через неё ставьте паузу, меняйте снегопад, ветер и
+                инструмент или убирайте весь снег кнопкой «Очистить».
+              </p>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="faq" id="faq" aria-labelledby="faq-title">
+        <div class="container container-narrow">
+          <div class="section-head">
+            <h2 id="faq-title">Вопросы</h2>
+          </div>
+          <div class="faq-list">
+            <details>
+              <summary>Не будет ли Mac тормозить?</summary>
+              <p>
+                Нет. Частицы и сугробы рисуются на видеокарте через Metal, количество снежинок
+                ограничено, а на паузе отрисовка полностью останавливается. Обычно Sugrob занимает
+                единицы процентов процессора.
+              </p>
+            </details>
+            <details>
+              <summary>Снег не помешает нажимать на кнопки?</summary>
+              <p>
+                Не помешает. Снег рисуется в прозрачном окне, которое пропускает все клики и
+                прокрутку к приложениям под ним. Варежка и снежки реагируют на движения мыши, но
+                ничего не перехватывают.
+              </p>
+            </details>
+            <details>
+              <summary>Работает ли с несколькими мониторами?</summary>
+              <p>
+                Да. На каждом экране свой слой со снегом, а сугробы появляются на окнах и Dock
+                того монитора, где они находятся.
+              </p>
+            </details>
+            <details>
+              <summary>Что Sugrob знает о моих окнах?</summary>
+              <p>
+                Только их положение и размер, чтобы понимать, куда класть снег. Содержимое окон,
+                заголовки документов и снимки экрана приложение не читает и никуда не отправляет.
+                Код открыт, это можно проверить.
+              </p>
+            </details>
+            <details>
+              <summary>Как выключить снег?</summary>
+              <p>
+                Нажмите на снежинку в строке меню и выберите «Пауза», чтобы снег замер, или
+                «Завершить», чтобы закрыть приложение. Удалить его можно, просто перетащив из
+                «Программ» в корзину.
+              </p>
+            </details>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-inner">
+        <p>© 2026 Sugrob</p>
+        <p>Не связано с Apple Inc.</p>
+        <p><a href="https://github.com/dolby228/Sugrob">GitHub</a></p>
+      </div>
+    </footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
