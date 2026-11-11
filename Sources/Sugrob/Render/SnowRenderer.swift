@@ -272,6 +272,10 @@ final class SnowRenderer {
     /// Back-most surface index that has a shape standing on it, or -1.
     private var backmostShapeSurface = -1
 
+    /// Height (pt) of the menu bar at the top of this screen. Drifts and the objects on
+    /// them are clipped below it; falling flakes still pass over it.
+    var menuBarInset: Float = 0
+
     init(pipelines: RenderPipelines) {
         self.pipelines = pipelines
     }
@@ -308,6 +312,8 @@ final class SnowRenderer {
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
         encoder.label = "snow"
+        let fullTarget = MTLScissorRect(x: 0, y: 0, width: target.width, height: target.height)
+        let belowMenuBar = Self.scissor(below: menuBarInset, viewport: viewport, target: target)
         var uniforms = RenderUniforms(viewportSize: viewport)
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<RenderUniforms>.stride, index: 1)
 
@@ -321,6 +327,7 @@ final class SnowRenderer {
                 encoder.drawPrimitives(type: .triangle, vertexStart: draw.start, vertexCount: draw.count)
             }
 
+            encoder.setScissorRect(belowMenuBar)
             encoder.setRenderPipelineState(pipelines.driftPipeline)
             encoder.setDepthStencilState(pipelines.driftStencil)
             for draw in driftDraws {
@@ -330,6 +337,7 @@ final class SnowRenderer {
         }
 
         if let shapeBuffer, !shapeDraws.isEmpty {
+            encoder.setScissorRect(belowMenuBar)
             encoder.setRenderPipelineState(pipelines.shapePipeline)
             encoder.setDepthStencilState(pipelines.driftStencil)
             encoder.setVertexBuffer(shapeBuffer, offset: 0, index: 0)
@@ -342,6 +350,7 @@ final class SnowRenderer {
         }
 
         if flakeCount > 0, let flakeBuffer = flakeBuffers[frameIndex] {
+            encoder.setScissorRect(fullTarget)
             encoder.setRenderPipelineState(pipelines.flakePipeline)
             encoder.setDepthStencilState(pipelines.flakeStencil)
             encoder.setStencilReferenceValue(0)
@@ -354,6 +363,14 @@ final class SnowRenderer {
         Self.signalOnCompletion(commandBuffer, semaphore: inFlight)
         commandBuffer.commit()
         committed = true
+    }
+
+    /// Pixel rect of the target below the top `inset` points (Metal's origin is top left).
+    private static func scissor(below inset: Float, viewport: SIMD2<Float>, target: MTLTexture) -> MTLScissorRect {
+        let scale = Float(target.height) / viewport.y
+        let top = inset.isFinite ? Int((max(0, inset) * scale).rounded(.up)) : 0
+        let y = min(top, max(0, target.height - 1))
+        return MTLScissorRect(x: 0, y: y, width: target.width, height: target.height - y)
     }
 
     /// Kept nonisolated so the completion closure never inherits main-actor isolation.
