@@ -24,15 +24,25 @@
     <header class="site-header">
       <div class="container header-inner">
         <a class="logo" href="#top" aria-label="Sugrob — на главную">
-          <svg class="logo-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
-            <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-              <path d="M16 3.5v12M10.8 6.5l10.4 6M10.8 12.5l10.4-6" />
-              <path d="M14 4.6l2 1.6 2-1.6M14 14.4l2-1.6 2 1.6" />
+          <svg class="logo-mark" aria-hidden="true" focusable="false" viewBox="0 0 32 32">
+            <defs>
+              <linearGradient id="logo-sky" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#07102e"/>
+                <stop offset=".6" stop-color="#16306a"/>
+                <stop offset="1" stop-color="#2e5aa0"/>
+              </linearGradient>
+              <radialGradient id="logo-glow" cx="16" cy="12.2" r="13" gradientUnits="userSpaceOnUse">
+                <stop offset="0" stop-color="#8fb8ff" stop-opacity=".35"/>
+                <stop offset="1" stop-color="#8fb8ff" stop-opacity="0"/>
+              </radialGradient>
+              <clipPath id="logo-body"><rect width="32" height="32" rx="7.2"/></clipPath>
+            </defs>
+            <g clip-path="url(#logo-body)">
+              <rect width="32" height="32" fill="url(#logo-sky)"/>
+              <rect width="32" height="32" fill="url(#logo-glow)"/>
+              <path d="M-1.6 23C2.7 20.3 7.8 20.7 11.7 21.8 15.5 23 19 25.3 23.3 24.2 27.6 23 31.1 19.5 33.6 20.7V33H-1.6Z" fill="#f4f8ff"/>
             </g>
-            <path
-              class="logo-drift"
-              d="M2 28c2.6-4.6 6.6-6.6 10.4-5.4 2.6-3.2 9-3.8 13 -.4 1.6 1.4 2.8 3.3 3.6 5.8z"
-            />
+            <path d="M16 12.2V4.6M16 8.4l1.72-1.72M16 8.4l-1.72-1.72M16 6.42l1.18-1.18M16 6.42l-1.18-1.18M16 12.2L9.42 8.4M12.71 10.3l-.63-2.35M12.71 10.3l-2.35.63M11 9.31l-.43-1.61M11 9.31l-1.62.43M16 12.2L9.42 16M12.71 14.1l-2.35-.63M12.71 14.1l-.63 2.35M11 15.09l-1.62-.43M11 15.09l-.43 1.61M16 12.2v7.6M16 16l-1.72 1.72M16 16l1.72 1.72M16 17.98l-1.18 1.18M16 17.98l1.18 1.18M16 12.2l6.58 3.8M19.29 14.1l.63 2.35M19.29 14.1l2.35-.63M21 15.09l.43 1.61M21 15.09l1.62-.43M16 12.2l6.58-3.8M19.29 10.3l2.35.63M19.29 10.3l.63-2.35M21 9.31l1.62.43M21 9.31l.43-1.61" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
           <span class="logo-word">Sugrob</span>
         </a>

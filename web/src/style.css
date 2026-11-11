@@ -232,13 +232,9 @@ kbd {
 }
 
 .logo-mark {
+  flex: none;
   width: 32px;
   height: 32px;
-  color: var(--ice);
-}
-
-.logo-drift {
-  fill: var(--snow);
 }
 
 .logo-word {
