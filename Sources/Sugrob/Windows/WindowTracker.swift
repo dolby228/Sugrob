@@ -30,11 +30,16 @@ final class WindowTracker: NSObject {
     static let ignoredOccluderOwners: Set<String> = ["Window Server", "SystemUIServer", "Control Center"]
     /// A window covering at least this share of a screen is a backdrop, not an occluder.
     static let fullScreenCoverage: CGFloat = 0.9
+    /// Owners whose near full-screen panels (Launchpad / Apps, Mission Control, Spotlight)
+    /// hide all snow on that screen. The Dock itself is matched by pid as well.
+    static let coveringPanelOwners: Set<String> = [DockLocator.ownerName, "Spotlight"]
 
     private var timer: Timer?
     private var dockFrames: [Int: CGRect] = [:]
     /// System panels in front of all ordinary windows, front to back, CG global.
     private var occluders: [TrackedWindow] = []
+    /// Displays hidden behind a full-screen system panel.
+    private var coveredDisplays: Set<CGDirectDisplayID> = []
     private let dockLocator = DockLocator()
     private let ownPID = getpid()
 
@@ -86,11 +91,15 @@ final class WindowTracker: NSObject {
         let panels = findOccluders(in: list, dockWindowIDs: dock.windowIDs)
         let panelsChanged = panels != occluders
 
-        guard !events.isEmpty || orderChanged || docksChanged || panelsChanged else { return }
+        let covered = findCoveredDisplays(in: list)
+        let coveredChanged = covered != coveredDisplays
+
+        guard !events.isEmpty || orderChanged || docksChanged || panelsChanged || coveredChanged else { return }
 
         windows = current
         dockFrames = docks
         occluders = panels
+        coveredDisplays = covered
         for event in events {
             Self.logEvent(event)
         }
@@ -101,6 +110,10 @@ final class WindowTracker: NSObject {
             let summary = panels.map { "\($0.id) \($0.ownerName) \(String(describing: $0.frame))" }
                 .joined(separator: ", ")
             log.debug("occluders: \(summary, privacy: .public)")
+        }
+        if coveredChanged {
+            let ids = covered.map { String($0) }.sorted().joined(separator: ", ")
+            log.debug("displays covered by a system panel: [\(ids, privacy: .public)]")
         }
         onUpdate?(current, events)
     }
@@ -165,6 +178,35 @@ final class WindowTracker: NSObject {
                 continue
             }
             result.append(TrackedWindow(id: entry.id, ownerName: entry.ownerName, ownerPID: entry.ownerPID, frame: entry.bounds))
+        }
+        return result
+    }
+
+    /// True while a full-screen system panel (Launchpad / Apps, Mission Control, Spotlight)
+    /// covers `screen`; the snow there should be hidden.
+    func isCoveredByPanel(_ screen: NSScreen) -> Bool {
+        guard let id = screen.displayID else { return false }
+        return coveredDisplays.contains(id)
+    }
+
+    /// Displays at least 90% covered by a visible Dock or Spotlight window above layer 0.
+    /// The Dock's own Dock-level windows are skipped: one of them is a permanent,
+    /// transparent full-screen window.
+    private func findCoveredDisplays(in list: [WindowListEntry]) -> Set<CGDirectDisplayID> {
+        let primaryHeight = Coordinates.primaryScreenHeight
+        var result: Set<CGDirectDisplayID> = []
+        for entry in list {
+            guard entry.layer > 0, entry.layer < Self.overlayLayer, entry.alpha > 0 else { continue }
+            let isDock = dockLocator.isDockOwned(entry)
+            guard isDock || Self.coveringPanelOwners.contains(entry.ownerName) else { continue }
+            if isDock && entry.layer == DockLocator.dockLevel { continue }
+            for screen in NSScreen.screens {
+                guard let id = screen.displayID else { continue }
+                let screenCG = Coordinates.cgRect(fromCocoa: screen.frame, primaryHeight: primaryHeight)
+                if Self.coverage(of: entry.bounds, on: screenCG) >= Self.fullScreenCoverage {
+                    result.insert(id)
+                }
+            }
         }
         return result
     }

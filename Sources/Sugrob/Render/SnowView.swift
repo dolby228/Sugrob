@@ -20,6 +20,8 @@ final class SnowView: MTKView, OverlayContent {
     private var debugView: DebugOverlayView?
     private var framesPerSecond = 60
     private var isSnowPaused = false
+    /// A full-screen system panel covers the screen; drawing stops, the world keeps its state.
+    private var isCovered = false
 
     /// Longest simulated step; a stalled frame must not teleport flakes through drifts.
     static let maxStep: CFTimeInterval = 1.0 / 20.0
@@ -100,6 +102,7 @@ final class SnowView: MTKView, OverlayContent {
             lastSurfaces = surfaces
             // Occluders never carry snow; the renderer only uses them to hide drifts.
             world.setSurfaces(surfaces.filter { $0.kind != .occluder }.map(Self.surface(from:)))
+            renderer.occluders = surfaces.filter { $0.kind == .occluder }.map { Self.surface(from: $0).rect }
         }
         debugView?.update(surfaces: surfaces, screen: screen)
     }
@@ -108,11 +111,25 @@ final class SnowView: MTKView, OverlayContent {
     func setPaused(_ paused: Bool) {
         isSnowPaused = paused
         world.isPaused = paused
-        isHidden = paused
-        isPaused = paused
-        // Do not count the paused time as one long frame.
-        lastFrameTime = nil
+        applyVisibility()
         log.debug("snow view \(paused ? "paused" : "resumed", privacy: .public)")
+    }
+
+    /// Hides the snow while a full-screen system panel covers the screen. The world is not
+    /// paused, it simply is not stepped until the panel goes away.
+    func setCovered(_ covered: Bool) {
+        guard covered != isCovered else { return }
+        isCovered = covered
+        applyVisibility()
+        log.debug("snow view \(covered ? "covered by a system panel" : "uncovered", privacy: .public)")
+    }
+
+    private func applyVisibility() {
+        let hidden = isSnowPaused || isCovered
+        isHidden = hidden
+        isPaused = hidden
+        // Do not count the hidden time as one long frame.
+        lastFrameTime = nil
     }
 
     static func surface(from tracked: TrackedSurface) -> Surface {
@@ -160,7 +177,7 @@ final class SnowView: MTKView, OverlayContent {
 
     /// Called by MTKView's display loop at `preferredFramesPerSecond`.
     override func draw(_ dirtyRect: NSRect) {
-        guard !isSnowPaused else { return }
+        guard !isSnowPaused, !isCovered else { return }
         let now = CACurrentMediaTime()
         let dt: CFTimeInterval
         if let last = lastFrameTime {
