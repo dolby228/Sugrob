@@ -9,6 +9,12 @@ private let log = Logger(subsystem: "dev.sugrob", category: "menu")
 final class MenuBarController: NSObject, NSMenuDelegate {
     /// «Настройки…».
     var onOpenSettings: (() -> Void)?
+    /// Called at most once per launch when the status item turns out not to be visible.
+    /// The argument is a short reason for the log.
+    var onStatusItemHidden: ((String) -> Void)?
+
+    private var reportedHidden = false
+    private var visibilityCheck: DispatchWorkItem?
 
     private let settings: Settings
     private let statusItem: NSStatusItem
@@ -25,6 +31,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         self.settings = settings
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
+        // Keeps a ⌘-drag position across launches.
+        statusItem.autosaveName = "dev.sugrob.statusItem"
 
         if let button = statusItem.button {
             if let image = NSImage(systemSymbolName: "snowflake", accessibilityDescription: "Sugrob") {
@@ -44,6 +52,80 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         settings.addObserver { [weak self] _ in
             self?.refreshStates()
         }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(screenParametersChanged(_:)),
+            name: NSApplication.didChangeScreenParametersNotification,
+            object: nil
+        )
+    }
+
+    // MARK: Visibility
+
+    /// Checks a bit later whether the status item is actually visible: the menu bar lays
+    /// out items asynchronously, and on a full menu bar a notched Mac hides them.
+    func scheduleVisibilityCheck(after delay: TimeInterval = 2) {
+        visibilityCheck?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                self?.checkVisibility()
+            }
+        }
+        visibilityCheck = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    @objc private func screenParametersChanged(_ notification: Notification) {
+        scheduleVisibilityCheck()
+    }
+
+    private func checkVisibility() {
+        guard let reason = hiddenReason() else {
+            log.debug("status item visible")
+            return
+        }
+        log.notice("status item hidden: \(reason, privacy: .public)")
+        guard !reportedHidden else { return }
+        reportedHidden = true
+        onStatusItemHidden?(reason)
+    }
+
+    /// Nil when the status item looks visible, otherwise why it is not.
+    func hiddenReason() -> String? {
+        guard statusItem.isVisible else { return "isVisible is false" }
+        guard let window = statusItem.button?.window else { return "no button window" }
+        if !window.occlusionState.contains(.visible) {
+            return "button window is occluded"
+        }
+        let frame = window.frame
+        guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(frame) }) else {
+            return "button window \(frame) is off every screen"
+        }
+        guard screen.safeAreaInsets.top > 0,
+              let left = screen.auxiliaryTopLeftArea.map({ Self.global($0, on: screen) }),
+              let right = screen.auxiliaryTopRightArea.map({ Self.global($0, on: screen) })
+        else { return nil }
+        // The notch is the gap between the two unobscured top areas.
+        let notch = NSRect(
+            x: left.maxX,
+            y: min(left.minY, right.minY),
+            width: right.minX - left.maxX,
+            height: max(left.height, right.height)
+        )
+        if notch.width > 0, notch.intersects(frame) {
+            return "button window \(frame) intersects the notch \(notch)"
+        }
+        // Status items live right of the notch; anything left of it is under the app menus.
+        if frame.minX < right.minX - 1 {
+            return "button window \(frame) is left of the notch \(notch)"
+        }
+        return nil
+    }
+
+    /// `auxiliaryTop*Area` should be in global coordinates; tolerate screen-local rects.
+    private static func global(_ rect: NSRect, on screen: NSScreen) -> NSRect {
+        if screen.frame.contains(rect) { return rect }
+        return rect.offsetBy(dx: screen.frame.minX, dy: screen.frame.minY)
     }
 
     // MARK: Building
@@ -225,6 +307,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             "windowFrame": Diagnostics.rect(window?.frame),
             "occlusionVisible": window.map { $0.occlusionState.contains(.visible) } ?? false,
             "screen": window?.screen?.localizedName ?? "",
+            "hiddenReason": (hiddenReason() as Any?) ?? NSNull(),
         ]
     }
 

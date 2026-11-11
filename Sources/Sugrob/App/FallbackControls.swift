@@ -10,6 +10,9 @@ final class FallbackControls {
     static let welcomeMessage =
         "Снежинка в строке меню — управление. Если её не видно (закрыта вырезом экрана), откройте Sugrob ещё раз или нажмите ⌥⌘,"
 
+    static let hiddenStatusItemMessage =
+        "Значок Sugrob не виден в строке меню: скорее всего, его закрыл вырез экрана. Управлять снегом можно здесь. Открыть это окно снова: запустите Sugrob ещё раз или нажмите ⌥⌘,"
+
     private static let didShowWelcomeKey = "didShowWelcome"
 
     private let settings: Settings
@@ -31,6 +34,9 @@ final class FallbackControls {
         menuBar.onOpenSettings = { [weak self] in
             self?.showSettings()
         }
+        menuBar.onStatusItemHidden = { [weak self] reason in
+            self?.statusItemHidden(reason)
+        }
     }
 
     func start() {
@@ -45,6 +51,7 @@ final class FallbackControls {
             log.info("first launch, showing welcome")
             showSettings(message: Self.welcomeMessage)
         }
+        menuBar.scheduleVisibilityCheck()
     }
 
     func stop() {
@@ -54,6 +61,15 @@ final class FallbackControls {
 
     func showSettings(message: String? = nil) {
         settingsWindow.show(message: message)
+    }
+
+    private func statusItemHidden(_ reason: String) {
+        if settingsWindow.isShowingMessage {
+            log.info("status item hidden (\(reason, privacy: .public)), welcome already shown")
+            return
+        }
+        log.info("status item hidden (\(reason, privacy: .public)), showing settings")
+        showSettings(message: Self.hiddenStatusItemMessage)
     }
 
     private func perform(_ action: HotKeys.Action) {
