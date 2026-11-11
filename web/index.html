@@ -182,14 +182,20 @@
                 <path d="M7 21v-8a3 3 0 0 1 3-3h0V6a2 2 0 0 1 4 0v4h1a3 3 0 0 1 3 3v8z" /><path d="M7 15H5a2 2 0 0 1 0-4h2" />
               </svg>
               <h3>Варежка и лопата</h3>
-              <p>Смахните часть сугроба курсором или уберите весь снег одним движением.</p>
+              <p>
+                Варежкой смахните часть сугроба. Лопатой наберите снег и бросьте его комом на другое
+                окно или на Dock.
+              </p>
             </li>
             <li class="card">
               <svg class="card-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <circle cx="12" cy="17" r="5" /><circle cx="12" cy="8.5" r="3.5" /><path d="M12 9l3 .6" />
               </svg>
               <h3>Снеговик на окне</h3>
-              <p>Скатайте снежки прямо из сугробов и поставьте их друг на друга. Остальное он сделает сам.</p>
+              <p>
+                Зажмите <kbd>⌥</kbd> и ведите по сугробу, чтобы скатать снежок. Три снежка друг на
+                друге становятся снеговиком.
+              </p>
             </li>
             <li class="card">
               <svg class="card-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -227,28 +233,41 @@
               <span class="step-num" aria-hidden="true">1</span>
               <h3>Скачайте</h3>
               <p>
-                Возьмите свежий архив на странице
-                <a href="https://github.com/dolby228/Sugrob/releases/latest">релизов</a> и перетащите
-                Sugrob в папку «Программы».
+                Возьмите <code>Sugrob.zip</code> на странице
+                <a href="https://github.com/dolby228/Sugrob/releases/latest">релизов</a>, распакуйте
+                и перетащите Sugrob в папку «Программы».
               </p>
             </li>
             <li class="step">
               <span class="step-num" aria-hidden="true">2</span>
               <h3>Откройте</h3>
               <p>
-                При первом запуске нажмите на значок правой кнопкой и выберите «Открыть»: так macOS
-                пропустит приложение без подписи из App Store.
+                Приложение не из App Store, поэтому в первый раз нажмите на него правой кнопкой и
+                выберите «Открыть». Или выполните в Терминале
+                <code class="cmd">xattr -dr com.apple.quarantine /Applications/Sugrob.app</code>
               </p>
             </li>
             <li class="step">
               <span class="step-num" aria-hidden="true">3</span>
               <h3>Снег идёт</h3>
               <p>
-                В строке меню появится снежинка. Через неё ставьте паузу, меняйте снегопад, ветер и
-                инструмент или убирайте весь снег кнопкой «Очистить».
+                В строке меню появится снежинка: там пауза, снегопад, ветер, инструмент и
+                «Очистить». Если снежинку спрятал вырез экрана, откройте Sugrob ещё раз или нажмите
+                <kbd>⌃⌥⌘,</kbd>, и откроется окно настроек.
               </p>
             </li>
           </ol>
+
+          <div class="hotkeys" role="group" aria-labelledby="hotkeys-title">
+            <h3 id="hotkeys-title">Горячие клавиши</h3>
+            <dl>
+              <div><dt><kbd>⌃⌥⌘S</kbd></dt><dd>пауза</dd></div>
+              <div><dt><kbd>⌃⌥⌘,</kbd></dt><dd>настройки</dd></div>
+              <div><dt><kbd>⌃⌥⌘K</kbd></dt><dd>очистить</dd></div>
+              <div><dt><kbd>⌃⌥⌘Q</kbd></dt><dd>выйти</dd></div>
+            </dl>
+            <p>Работают в любом приложении и не требуют разрешений.</p>
+          </div>
         </div>
       </section>
 
