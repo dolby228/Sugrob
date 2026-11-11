@@ -230,4 +230,37 @@ final class SnowWorldTests: XCTestCase {
         // The part of the back window covered by the front one gets nothing.
         XCTAssertEqual(backDrift.height(atX: 400), 0)
     }
+
+    /// Snow sliding off a full drift must not fall as a steady stream right at the window
+    /// sides: from a distance that reads as a dotted line running down each edge.
+    func testNoFlakeStreamsAlongWindowSides() {
+        let world = SnowWorld(bounds: screen, seed: 9, preset: .steady)
+        world.depositFactor = 30
+        let side = Surface(id: 3, rect: Rect(x: 300, y: 150, width: 200, height: 350))
+        world.setSurfaces([side])
+        let r = side.rect
+        // Let the drift fill up so it sheds snow off both ends all the time.
+        run(world, steps: 60 * 60)
+        XCTAssertGreaterThan(world.drifts[side.id]!.peakHeight, 20)
+
+        let strip: Float = 6
+        var nearEdge = 0
+        var beside = 0
+        for _ in 0..<(60 * 60 / 5) {
+            run(world, steps: 5)
+            for f in world.flakes where f.position.y > r.y + 10 && f.position.y < r.maxY {
+                let x = f.position.x
+                if abs(x - r.x) < strip || abs(x - r.maxX) < strip {
+                    nearEdge += 1
+                } else if (x > r.x - 110 && x < r.x - 20) || (x > r.maxX + 20 && x < r.maxX + 110) {
+                    beside += 1
+                }
+            }
+        }
+        XCTAssertGreaterThan(beside, 0)
+        let edgeDensity = Float(nearEdge) / (4 * strip)
+        let besideDensity = Float(beside) / 180
+        XCTAssertLessThanOrEqual(edgeDensity, 3 * besideDensity,
+                                 "flakes crowd the window sides: \(nearEdge) near edges vs \(beside) beside")
+    }
 }
