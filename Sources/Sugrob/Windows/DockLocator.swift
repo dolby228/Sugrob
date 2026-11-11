@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import os
 
 private let log = Logger(subsystem: "dev.sugrob", category: "tracker")
@@ -7,9 +8,10 @@ private let log = Logger(subsystem: "dev.sugrob", category: "tracker")
 ///
 /// The reserved strip (`screen.frame` vs `screen.visibleFrame`) only says which edge the
 /// Dock is on; the tiles themselves are usually much narrower. Sources, best first:
-/// 1. A Dock-owned window at Dock level that lies in the strip and is smaller than it.
-/// 2. An estimate from the `com.apple.dock` preferences (tile size and tile count).
-/// 3. 55% of the strip, centered.
+/// 1. The Dock's `AXList` element, if Accessibility is already granted (never prompted).
+/// 2. A Dock-owned window at Dock level that lies in the strip and is smaller than it.
+/// 3. An estimate from the `com.apple.dock` preferences (tile size and tile count).
+/// 4. 55% of the strip, centered.
 /// The result is always clipped to the strip.
 @MainActor
 final class DockLocator {
@@ -25,13 +27,13 @@ final class DockLocator {
     }
 
     enum Source: String {
-        case window, preferences, guess
+        case accessibility, window, preferences, guess
     }
 
     static let bundleID = "com.apple.dock"
     static let ownerName = "Dock"
     static let dockLevel = Int(CGWindowLevelForKey(.dockWindow))
-    /// Preferences (and the Dock pid) are re-read at most this often.
+    /// Accessibility, preferences and the Dock pid are re-read at most this often.
     static let slowRefreshInterval: TimeInterval = 1
     /// Share of the strip used when nothing better is known.
     static let guessedShare: CGFloat = 0.55
@@ -39,6 +41,8 @@ final class DockLocator {
     private(set) var dockPID: pid_t?
     private var lastSlowRefresh: TimeInterval = -.infinity
     private var preferences: DockPreferences?
+    /// CG global frame of the Dock tile list read via Accessibility.
+    private var accessibilityFrame: CGRect?
     private var loggedDockWindows: [WindowListEntry] = []
     private var loggedSources: [Int: Source] = [:]
 
@@ -80,7 +84,18 @@ final class DockLocator {
 
             var frame: CGRect?
             var source = Source.guess
-            if let tileWindow, let fitted = Self.fit(tileWindow, in: strip) {
+            if let accessibilityFrame {
+                let local = Coordinates.screenLocal(
+                    fromCG: accessibilityFrame,
+                    screenFrame: screenFrame,
+                    primaryHeight: primaryHeight
+                )
+                if Self.liesInStrip(local, strip: strip, edge: edge), let fitted = Self.fit(local, in: strip) {
+                    frame = fitted
+                    source = .accessibility
+                }
+            }
+            if frame == nil, let tileWindow, let fitted = Self.fit(tileWindow, in: strip) {
                 frame = fitted
                 source = .window
             }
@@ -197,6 +212,62 @@ final class DockLocator {
             self.preferences = preferences
             log.debug("dock preferences \(String(describing: preferences), privacy: .public)")
         }
+
+        var axFrame: CGRect?
+        if let pid = dockPID, AXIsProcessTrusted() {
+            axFrame = Self.readAccessibilityFrame(dockPID: pid)
+        }
+        if axFrame != accessibilityFrame {
+            accessibilityFrame = axFrame
+            log.debug("dock accessibility frame \(String(describing: axFrame), privacy: .public)")
+        }
+    }
+
+    /// Frame of the Dock's tile list (`AXList`), in CG global coordinates (AX uses the
+    /// same top-left, y-down space). Needs Accessibility; never asks for it.
+    static func readAccessibilityFrame(dockPID: pid_t) -> CGRect? {
+        let app = AXUIElementCreateApplication(dockPID)
+        _ = AXUIElementSetMessagingTimeout(app, 0.25)
+
+        var childrenValue: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(app, "AXChildren" as CFString, &childrenValue) == .success,
+            let children = childrenValue as? [AXUIElement]
+        else { return nil }
+
+        var best: CGRect?
+        for child in children {
+            var roleValue: CFTypeRef?
+            guard
+                AXUIElementCopyAttributeValue(child, "AXRole" as CFString, &roleValue) == .success,
+                let role = roleValue as? String, role == "AXList"
+            else { continue }
+
+            var positionValue: CFTypeRef?
+            var sizeValue: CFTypeRef?
+            guard
+                AXUIElementCopyAttributeValue(child, "AXPosition" as CFString, &positionValue) == .success,
+                AXUIElementCopyAttributeValue(child, "AXSize" as CFString, &sizeValue) == .success,
+                let positionRef = positionValue, let sizeRef = sizeValue,
+                CFGetTypeID(positionRef) == AXValueGetTypeID(),
+                CFGetTypeID(sizeRef) == AXValueGetTypeID()
+            else { continue }
+
+            var origin = CGPoint.zero
+            var size = CGSize.zero
+            // The type ids were checked above, so these casts cannot fail.
+            guard
+                AXValueGetValue(positionRef as! AXValue, .cgPoint, &origin),
+                AXValueGetValue(sizeRef as! AXValue, .cgSize, &size),
+                size.width > 0, size.height > 0
+            else { continue }
+
+            let frame = CGRect(origin: origin, size: size)
+            if best.map({ frame.width * frame.height > $0.width * $0.height }) ?? true {
+                best = frame
+            }
+        }
+        return best
     }
 
     private func logDockWindows(_ windows: [WindowListEntry]) {
