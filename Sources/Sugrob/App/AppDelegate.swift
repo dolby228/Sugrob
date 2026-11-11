@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settings: Settings?
     private var menuBar: MenuBarController?
     private var controls: FallbackControls?
+    private var dock: DockPresence?
     private var tracker: WindowTracker?
     private var overlay: OverlayController?
     private var power: PowerMonitor?
@@ -46,7 +47,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let menuBar = MenuBarController(settings: settings)
         self.menuBar = menuBar
-        controls = FallbackControls(settings: settings, menuBar: menuBar)
+        let controls = FallbackControls(settings: settings, menuBar: menuBar)
+        self.controls = controls
+        let dock = DockPresence(settings: settings)
+        dock.onOpenSettings = { [weak controls] in
+            controls?.showSettings()
+        }
+        dock.apply()
+        self.dock = dock
 
         let mouse = MouseInput(settings: settings) { [weak self] in
             self?.snowWorlds() ?? []
@@ -89,6 +97,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        dock?.dockMenu()
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         controls?.stop()
         mouse?.stop()
@@ -127,6 +139,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             applyDebugOutlines()
         case .tool:
             mouse?.toolChanged()
+        case .showInDock:
+            // Switching to accessory deactivates the app and can hide the settings window.
+            let settingsVisible = controls?.isSettingsVisible ?? false
+            dock?.apply()
+            if settingsVisible {
+                DispatchQueue.main.async { [weak self] in
+                    self?.controls?.showSettings()
+                }
+            }
         case .snowfall, .windX, .windY:
             // Snowfall and wind reach each SnowView through its WorldSettingsBinder.
             break
