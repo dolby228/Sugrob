@@ -15,7 +15,7 @@ private let log = Logger(subsystem: "dev.sugrob", category: "tracker")
 /// The result is always clipped to the strip.
 ///
 /// Nothing is reported while the Dock is not shown: no reserved strip (auto-hide),
-/// `autohide` set in the preferences, or a full-screen window in front (full-screen Space).
+/// `autohide` set in the preferences, or a full-screen Space (see `fullScreenReason`).
 @MainActor
 final class DockLocator {
     struct Result: Equatable {
@@ -40,6 +40,19 @@ final class DockLocator {
     static let slowRefreshInterval: TimeInterval = 1
     /// Share of the strip used when nothing better is known.
     static let guessedShare: CGFloat = 0.55
+    /// The menu bar is a window of this owner at the main menu level.
+    static let menuBarOwner = "Window Server"
+    static let menuBarLevel = Int(CGWindowLevelForKey(.mainMenuWindow))
+    /// Slack for comparing window edges with screen edges, in points.
+    static let edgeTolerance: CGFloat = 2
+
+    /// Why a screen is taken for a full-screen Space.
+    enum FullScreenReason: String, Equatable {
+        /// The front-most window spans the screen from the menu bar (or notch) down.
+        case frontWindow = "front window fills the screen"
+        /// No menu bar on the screen and a window lies where the Dock would be.
+        case noMenuBar = "no menu bar and a window under the dock"
+    }
 
     private(set) var dockPID: pid_t?
     private var lastSlowRefresh: TimeInterval = -.infinity
@@ -48,6 +61,7 @@ final class DockLocator {
     private var accessibilityFrame: CGRect?
     private var loggedDockWindows: [WindowListEntry] = []
     private var loggedSources: [Int: Source] = [:]
+    private var loggedFullScreen: [Int: FullScreenReason] = [:]
 
     /// Dock frames for every screen where the Dock is shown. `list` is the raw window list,
     /// `windows` the ordinary (layer 0) windows front to back.
@@ -62,6 +76,8 @@ final class DockLocator {
             return result
         }
         var sources: [Int: Source] = [:]
+        var fullScreen: [Int: FullScreenReason] = [:]
+        defer { logFullScreen(fullScreen) }
         let primaryHeight = Coordinates.primaryScreenHeight
         for screen in NSScreen.screens {
             guard let reserved = Self.reservedStrip(for: screen) else { continue }
@@ -69,7 +85,6 @@ final class DockLocator {
             let screenFrame = screen.frame
             let id = WindowTracker.dockSurfaceID(for: screen)
             let screenCG = Coordinates.cgRect(fromCocoa: screenFrame, primaryHeight: primaryHeight)
-            if Self.isFullScreenSpace(screenCG, windows: windows) { continue }
 
             // Dock-level windows of the Dock inside the strip; the best one is the tile row.
             var tileWindow: CGRect?
@@ -118,20 +133,90 @@ final class DockLocator {
                 frame = Self.centered(length: length, in: strip, edge: edge)
                 source = .guess
             }
-            if let frame {
-                result.frames[id] = frame
-                sources[id] = source
+            guard let frame else { continue }
+            let dockCG = Coordinates.cgRect(fromScreenLocal: frame, screenFrame: screenFrame, primaryHeight: primaryHeight)
+            if let reason = Self.fullScreenReason(
+                screenCG: screenCG,
+                topInset: Self.topInset(of: screen),
+                dockCG: dockCG,
+                list: list,
+                windows: windows
+            ) {
+                fullScreen[id] = reason
+                continue
             }
+            result.frames[id] = frame
+            sources[id] = source
         }
 
         logSources(sources)
         return result
     }
 
-    /// The front-most ordinary window on the screen covers all of it, menu bar included.
-    static func isFullScreenSpace(_ screenCG: CGRect, windows: [TrackedWindow]) -> Bool {
-        guard let front = windows.first(where: { $0.frame.intersects(screenCG) }) else { return false }
-        return front.frame.insetBy(dx: -1, dy: -1).contains(screenCG)
+    /// Non-nil when the screen shows a full-screen Space, where the Dock is hidden.
+    /// All rects are CG global; `windows` are the ordinary (layer 0) windows front to back.
+    ///
+    /// On a notched Mac a full-screen app starts below the notch (y = menu bar height), so
+    /// "the front window covers the whole screen" is not enough. Either:
+    /// - the front-most window on the screen spans its full width, reaches its bottom and
+    ///   starts no lower than the top inset; or
+    /// - the screen has no menu bar window and some window covers the Dock rect. The menu
+    ///   bar alone is not proof: with "automatically hide the menu bar" it is absent on the
+    ///   desktop too, while the Dock is still shown above the windows.
+    static func fullScreenReason(
+        screenCG: CGRect,
+        topInset: CGFloat,
+        dockCG: CGRect,
+        list: [WindowListEntry],
+        windows: [TrackedWindow]
+    ) -> FullScreenReason? {
+        let tolerance = edgeTolerance
+        if let front = windows.first(where: { $0.frame.intersects(screenCG) }) {
+            let frame = front.frame
+            if frame.minX <= screenCG.minX + tolerance,
+               frame.maxX >= screenCG.maxX - tolerance,
+               frame.maxY >= screenCG.maxY - tolerance,
+               frame.minY <= screenCG.minY + topInset + tolerance {
+                return .frontWindow
+            }
+        }
+        if !hasMenuBar(screenCG: screenCG, topInset: topInset, list: list),
+           windows.contains(where: { $0.frame.insetBy(dx: -tolerance, dy: -tolerance).contains(dockCG) }) {
+            return .noMenuBar
+        }
+        return nil
+    }
+
+    /// A menu bar window along the top of the screen is on screen. The height check is
+    /// lenient on purpose: a missed menu bar only matters together with a window under the
+    /// Dock, and the auto-hidden bar may report a different inset than it is tall.
+    static func hasMenuBar(screenCG: CGRect, topInset: CGFloat, list: [WindowListEntry]) -> Bool {
+        let tolerance = edgeTolerance
+        let maxHeight = max(topInset + 4, 60)
+        return list.contains { entry in
+            entry.ownerName == menuBarOwner
+                && entry.layer == menuBarLevel
+                && abs(entry.bounds.minY - screenCG.minY) <= tolerance
+                && abs(entry.bounds.minX - screenCG.minX) <= tolerance
+                && abs(entry.bounds.width - screenCG.width) <= tolerance
+                && entry.bounds.height > 0 && entry.bounds.height <= maxHeight
+        }
+    }
+
+    /// Menu bar height of the screen, or the notch's safe area when the bar is hidden.
+    static func topInset(of screen: NSScreen) -> CGFloat {
+        max(0, screen.frame.maxY - screen.visibleFrame.maxY, screen.safeAreaInsets.top)
+    }
+
+    private func logFullScreen(_ fullScreen: [Int: FullScreenReason]) {
+        guard fullScreen != loggedFullScreen else { return }
+        for (id, reason) in fullScreen where loggedFullScreen[id] != reason {
+            log.debug("dock \(id) hidden, full-screen space: \(reason.rawValue, privacy: .public)")
+        }
+        for id in loggedFullScreen.keys where fullScreen[id] == nil {
+            log.debug("dock \(id) left the full-screen space")
+        }
+        loggedFullScreen = fullScreen
     }
 
     private func logSources(_ sources: [Int: Source]) {
