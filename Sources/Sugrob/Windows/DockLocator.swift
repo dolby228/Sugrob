@@ -13,6 +13,9 @@ private let log = Logger(subsystem: "dev.sugrob", category: "tracker")
 /// 3. An estimate from the `com.apple.dock` preferences (tile size and tile count).
 /// 4. 55% of the strip, centered.
 /// The result is always clipped to the strip.
+///
+/// Nothing is reported while the Dock is not shown: no reserved strip (auto-hide),
+/// `autohide` set in the preferences, or a full-screen window in front (full-screen Space).
 @MainActor
 final class DockLocator {
     struct Result: Equatable {
@@ -46,13 +49,18 @@ final class DockLocator {
     private var loggedDockWindows: [WindowListEntry] = []
     private var loggedSources: [Int: Source] = [:]
 
-    /// Dock frames for every screen with a reserved strip. `list` is the raw window list.
-    func locate(in list: [WindowListEntry]) -> Result {
+    /// Dock frames for every screen where the Dock is shown. `list` is the raw window list,
+    /// `windows` the ordinary (layer 0) windows front to back.
+    func locate(in list: [WindowListEntry], windows: [TrackedWindow]) -> Result {
         refreshSlowSources()
         let dockWindows = list.filter { isDockOwned($0) }
         logDockWindows(dockWindows)
 
         var result = Result()
+        if preferences?.autohide == true {
+            logSources([:])
+            return result
+        }
         var sources: [Int: Source] = [:]
         let primaryHeight = Coordinates.primaryScreenHeight
         for screen in NSScreen.screens {
@@ -60,6 +68,8 @@ final class DockLocator {
             let (strip, edge) = reserved
             let screenFrame = screen.frame
             let id = WindowTracker.dockSurfaceID(for: screen)
+            let screenCG = Coordinates.cgRect(fromCocoa: screenFrame, primaryHeight: primaryHeight)
+            if Self.isFullScreenSpace(screenCG, windows: windows) { continue }
 
             // Dock-level windows of the Dock inside the strip; the best one is the tile row.
             var tileWindow: CGRect?
@@ -114,13 +124,25 @@ final class DockLocator {
             }
         }
 
-        if sources != loggedSources {
-            loggedSources = sources
-            for (id, source) in sources {
-                log.debug("dock \(id) located from \(source.rawValue, privacy: .public)")
-            }
-        }
+        logSources(sources)
         return result
+    }
+
+    /// The front-most ordinary window on the screen covers all of it, menu bar included.
+    static func isFullScreenSpace(_ screenCG: CGRect, windows: [TrackedWindow]) -> Bool {
+        guard let front = windows.first(where: { $0.frame.intersects(screenCG) }) else { return false }
+        return front.frame.insetBy(dx: -1, dy: -1).contains(screenCG)
+    }
+
+    private func logSources(_ sources: [Int: Source]) {
+        guard sources != loggedSources else { return }
+        loggedSources = sources
+        if sources.isEmpty {
+            log.debug("dock hidden on every screen")
+        }
+        for (id, source) in sources {
+            log.debug("dock \(id) located from \(source.rawValue, privacy: .public)")
+        }
     }
 
     func isDockOwned(_ entry: WindowListEntry) -> Bool {

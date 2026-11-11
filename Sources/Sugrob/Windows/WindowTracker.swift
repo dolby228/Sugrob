@@ -68,7 +68,7 @@ final class WindowTracker: NSObject {
         let events = Self.diff(old: windows, new: current)
         let orderChanged = events.isEmpty && current.map(\.id) != windows.map(\.id)
 
-        let docks = dockLocator.locate(in: list).frames
+        let docks = dockLocator.locate(in: list, windows: current).frames
         let docksChanged = docks != dockFrames
 
         guard !events.isEmpty || orderChanged || docksChanged else { return }
