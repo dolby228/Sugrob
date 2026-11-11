@@ -30,7 +30,7 @@ jobs:
       - name: Zip app
         run: ditto -c -k --keepParent dist/Sugrob.app dist/Sugrob.zip
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: Sugrob-app
           path: dist/Sugrob.zip
