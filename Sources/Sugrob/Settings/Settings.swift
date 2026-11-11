@@ -28,6 +28,7 @@ final class Settings {
         case windY
         case tool
         case showDebugOutlines
+        case showInDock
     }
 
     private let defaults: UserDefaults
@@ -42,6 +43,7 @@ final class Settings {
             Key.windY.rawValue: 0.0,
             Key.tool.rawValue: Tool.mitten.rawValue,
             Key.showDebugOutlines.rawValue: false,
+            Key.showInDock.rawValue: true,
         ])
     }
 
@@ -75,6 +77,13 @@ final class Settings {
     var showDebugOutlines: Bool {
         get { defaults.bool(forKey: Key.showDebugOutlines.rawValue) }
         set { store(newValue, for: .showDebugOutlines) }
+    }
+
+    /// Regular app with a Dock icon instead of a menu-bar-only accessory. On by default:
+    /// on notched Macs the status item is often hidden, and the Dock icon is the only handle.
+    var showInDock: Bool {
+        get { defaults.bool(forKey: Key.showInDock.rawValue) }
+        set { store(newValue, for: .showInDock) }
     }
 
     /// Sets both wind components with a single change notification per component.
