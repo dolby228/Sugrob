@@ -59,7 +59,12 @@ public final class SnowWorld {
 
     private static let swayFrequency: Float = 1.3
     private static let drag: Float = 2.5
-    private static let spillChunk: Float = 8
+    /// Spilled snow (pt²) that makes one clump falling off a drift end.
+    private static let spillClump: Float = 24
+    /// Spill waiting at one end beyond this is dropped instead of falling.
+    private static let spillBacklog: Float = 48
+    /// Seconds between two clumps leaving the same drift end.
+    private static let spillInterval: ClosedRange<Float> = 1.2...3.5
 
     public init(bounds: Rect, seed: UInt64 = UInt64.random(in: .min ... .max), preset: SnowfallPreset = .steady) {
         self.bounds = bounds
@@ -169,7 +174,7 @@ public final class SnowWorld {
         time += dt
         spawn(dt: dt)
         integrate(dt: dt)
-        settleDrifts()
+        settleDrifts(dt: dt)
         stepSnowObjects(dt: dt)
         stepClumps(dt: dt)
     }
@@ -271,25 +276,38 @@ public final class SnowWorld {
         return false
     }
 
-    private func settleDrifts() {
+    /// Settles every drift and lets what slid off the ends fall.
+    ///
+    /// A full drift sheds snow off both ends every frame. Falling as one flake per chunk at
+    /// the exact edge, that drew a dotted line down each window side, so spill now leaves
+    /// as an occasional clump thrown outwards from a jittered spot, and the rest is dropped.
+    private func settleDrifts(dt: Float) {
         for entry in entries {
             let drift = entry.drift
             drift.settle()
             let r = entry.rect
-            while drift.pendingSpillLeft >= SnowWorld.spillChunk {
-                drift.pendingSpillLeft -= SnowWorld.spillChunk
-                emitSpill(at: SIMD2(r.x - 1, r.y - 1), direction: -1, id: entry.id)
+            drift.spillCooldownLeft -= dt
+            drift.spillCooldownRight -= dt
+            if drift.pendingSpillLeft >= SnowWorld.spillClump, drift.spillCooldownLeft <= 0 {
+                drift.pendingSpillLeft -= SnowWorld.spillClump
+                drift.spillCooldownLeft = rng.float(in: SnowWorld.spillInterval)
+                emitSpill(edgeX: r.x, top: r.y, direction: -1, id: entry.id)
             }
-            while drift.pendingSpillRight >= SnowWorld.spillChunk {
-                drift.pendingSpillRight -= SnowWorld.spillChunk
-                emitSpill(at: SIMD2(r.maxX + 1, r.y - 1), direction: 1, id: entry.id)
+            if drift.pendingSpillRight >= SnowWorld.spillClump, drift.spillCooldownRight <= 0 {
+                drift.pendingSpillRight -= SnowWorld.spillClump
+                drift.spillCooldownRight = rng.float(in: SnowWorld.spillInterval)
+                emitSpill(edgeX: r.maxX, top: r.y, direction: 1, id: entry.id)
             }
+            drift.pendingSpillLeft = min(drift.pendingSpillLeft, SnowWorld.spillBacklog)
+            drift.pendingSpillRight = min(drift.pendingSpillRight, SnowWorld.spillBacklog)
         }
     }
 
-    private func emitSpill(at position: SIMD2<Float>, direction: Float, id: Int) {
-        let velocity = SIMD2<Float>(direction * rng.float(in: 5...20), rng.float(in: 5...20))
-        emitDebris(at: position, velocity: velocity, size: SnowWorld.spillChunk.squareRoot(), ignoring: id)
+    private func emitSpill(edgeX: Float, top: Float, direction: Float, id: Int) {
+        let position = SIMD2<Float>(edgeX + direction * rng.float(in: 1...5), top - rng.float(in: 1...4))
+        let velocity = SIMD2<Float>(direction * rng.float(in: 40...110), -rng.float(in: 5...45))
+        let size = rng.float(in: 0.8...1.1) * SnowWorld.spillClump.squareRoot()
+        emitDebris(at: position, velocity: velocity, size: size, ignoring: id)
     }
 
     // MARK: - Tools

@@ -14,8 +14,9 @@ public final class Drift {
     public var maxHeight: Float
     /// Largest rise per point of run that snow can hold (tangent of the angle of repose).
     public var reposeSlope: Float
-    /// Height the outermost columns can keep, in units of one repose step.
-    public var edgeHold: Float = 1
+    /// Height the outermost columns can keep, in units of one repose step. A slightly
+    /// taller lip keeps more snow on the window, so less of it slides off the ends.
+    public var edgeHold: Float = 2
     /// Largest height (pt) a column may stand above or sink below the mean of its two
     /// neighbours. `settle` diffuses anything beyond that, which rounds peaks and fills
     /// notches so the bank keeps a soft outline instead of a sawtooth.
@@ -26,6 +27,9 @@ public final class Drift {
     /// Snow that slid off the left/right edges during settling, waiting to be turned into flakes.
     var pendingSpillLeft: Float = 0
     var pendingSpillRight: Float = 0
+    /// Seconds until the next spilled clump may leave each end (see `SnowWorld.settleDrifts`).
+    var spillCooldownLeft: Float = 0
+    var spillCooldownRight: Float = 0
     private var reverseSweep = false
 
     public init(width: Float, columnSpacing: Float = 4, maxHeight: Float = 48, reposeSlope: Float = 0.35) {
