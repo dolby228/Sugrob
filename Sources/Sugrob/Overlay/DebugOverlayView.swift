@@ -1,7 +1,7 @@
 import AppKit
 
-/// Placeholder overlay content until the Metal renderer lands.
-/// Draws nothing unless outlines are enabled; then strokes the top edge of every tracked
+/// Outline overlay: a subview of `SnowView` in debug mode, or the whole overlay content
+/// when Metal is unavailable. Draws nothing unless outlines are enabled; then strokes the top edge of every tracked
 /// window and the Dock area in red, which makes coordinate bugs obvious.
 @MainActor
 final class DebugOverlayView: NSView, OverlayContent {
