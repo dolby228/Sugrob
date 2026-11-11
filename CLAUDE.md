@@ -40,6 +40,7 @@ cd web && npm i && npm run dev   # лендинг
 
 ## Debug-чеклист
 - **Снега не видно.** Проверить, что окно оверлея прозрачное (`isOpaque = false`, `backgroundColor = .clear`), что уровень не ниже `.statusBar`, что `collectionBehavior` содержит `.canJoinAllSpaces`. И что `MTKView.layer.isOpaque = false` с clear color alpha 0.
+- **Тёмные/белые ореолы вокруг снежинок или сугробов.** Окно композитит `CAMetalLayer` как premultiplied alpha: шейдер должен возвращать `rgb * a`, блендинг `.one` / `.oneMinusSourceAlpha`. Straight alpha даёт светлую кайму на тёмном фоне.
 - **Клики не проходят насквозь.** Нужен `ignoresMouseEvents = true` на оверлее. Мышь читаем только через `NSEvent.addGlobalMonitorForEvents`.
 - **Сугробы сдвинуты по вертикали.** У CG начало координат сверху слева, у Cocoa снизу слева. Перевод: `cocoaY = primaryScreenHeight - cgY - height`. На нескольких мониторах ось Y считается от **главного** экрана (`NSScreen.screens[0]`).
 - **Сугроб на окне, которое скрыто.** Фильтровать `kCGWindowLayer == 0` и `kCGWindowAlpha > 0`, а свои окна (`ownerPID == getpid()`) исключать.
