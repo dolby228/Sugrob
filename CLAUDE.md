@@ -44,5 +44,6 @@ cd web && npm i && npm run dev   # лендинг
 - **Клики не проходят насквозь.** Нужен `ignoresMouseEvents = true` на оверлее. Мышь читаем только через `NSEvent.addGlobalMonitorForEvents`.
 - **Сугробы сдвинуты по вертикали.** У CG начало координат сверху слева, у Cocoa снизу слева. Перевод: `cocoaY = primaryScreenHeight - cgY - height`. На нескольких мониторах ось Y считается от **главного** экрана (`NSScreen.screens[0]`).
 - **Сугроб на окне, которое скрыто.** Фильтровать `kCGWindowLayer == 0` и `kCGWindowAlpha > 0`, а свои окна (`ownerPID == getpid()`) исключать.
+- **Варежка/лопата/снежки не реагируют.** Мышь читаем через `NSEvent.addGlobalMonitorForEvents` (+ локальный монитор для своих окон). Для событий мыши разрешение Accessibility не нужно; для клавиатурных (`keyDown`) понадобились бы Accessibility / Input Monitoring. Глобальный монитор не получает события, адресованные нашему процессу, и не поглощает их: приложение под курсором тоже получает клик и drag. Категория логов `input`.
 - **Логи.** `os.Logger(subsystem: "dev.sugrob", category: ...)`; смотреть так: `log stream --predicate 'subsystem == "dev.sugrob"' --level debug`.
 - **Сборка упала в CI.** `gh run view --log-failed`.

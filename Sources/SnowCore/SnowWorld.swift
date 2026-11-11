@@ -35,15 +35,27 @@ public final class SnowWorld {
     /// Extra flakes allowed above the cap for snow knocked off drifts.
     public static let debrisAllowance = 400
 
-    private struct Entry {
+    /// Snowballs being rolled, falling or lying on surfaces (see `SnowWorld+Snowballs`).
+    public internal(set) var snowballs: [Snowball] = []
+    /// Finished snowmen standing on surfaces.
+    public internal(set) var snowmen: [Snowman] = []
+    /// Dumped shovel loads in flight (see `SnowWorld+Shovel`).
+    public internal(set) var clumps: [SnowClump] = []
+    /// Snow carried on the shovel, in pt².
+    public internal(set) var shovelLoad: Float = 0
+    /// Where the shovel blade is drawn; nil hides it. Set by the input layer.
+    public var shovelPosition: SIMD2<Float>?
+    var nextObjectID = 1
+
+    struct Entry {
         let id: Int
         var rect: Rect
         let drift: Drift
     }
 
-    private var rng: SplitMix64
+    var rng: SplitMix64
     private var spawnAccumulator: Float = 0
-    private var entries: [Entry] = []
+    var entries: [Entry] = []
 
     private static let swayFrequency: Float = 1.3
     private static let drag: Float = 2.5
@@ -75,6 +87,7 @@ public final class SnowWorld {
     /// moved ones keep theirs, removed ones crumble into falling clumps.
     public func setSurfaces(_ newSurfaces: [Surface]) {
         var seen = Set<Int>()
+        var shaken: [Int: SIMD2<Float>] = [:]
         var newEntries: [Entry] = []
         newEntries.reserveCapacity(newSurfaces.count)
 
@@ -85,6 +98,10 @@ public final class SnowWorld {
                 drift = existing
                 if old.rect != surface.rect {
                     surfaceChanged(id: surface.id, drift: drift, from: old.rect, to: surface.rect)
+                    let shift = SIMD2<Float>(surface.rect.x - old.rect.x, surface.rect.y - old.rect.y)
+                    if (shift.x * shift.x + shift.y * shift.y).squareRoot() > shakeThreshold {
+                        shaken[surface.id] = shift
+                    }
                 }
             } else {
                 drift = Drift(width: surface.rect.width, maxHeight: driftMaxHeight)
@@ -92,8 +109,10 @@ public final class SnowWorld {
             newEntries.append(Entry(id: surface.id, rect: surface.rect, drift: drift))
         }
 
+        var removed = Set<Int>()
         for entry in entries where !seen.contains(entry.id) {
             crumble(entry.drift, rect: entry.rect)
+            removed.insert(entry.id)
         }
 
         entries = newEntries
@@ -106,6 +125,10 @@ public final class SnowWorld {
         drifts = newDrifts
         surfaces = newSurfaceMap
         surfaceOrder = newEntries.map { $0.id }
+
+        if !snowballs.isEmpty || !snowmen.isEmpty {
+            snowObjectsSurfacesChanged(removed: removed, shaken: shaken)
+        }
     }
 
     private func surfaceChanged(id: Int, drift: Drift, from old: Rect, to new: Rect) {
@@ -147,6 +170,8 @@ public final class SnowWorld {
         spawn(dt: dt)
         integrate(dt: dt)
         settleDrifts()
+        stepSnowObjects(dt: dt)
+        stepClumps(dt: dt)
     }
 
     private func spawn(dt: Float) {
@@ -271,7 +296,17 @@ public final class SnowWorld {
 
     /// Mitten: removes snow under the circle on every drift; the snow is thrown sideways as clumps.
     public func sweep(at point: SIMD2<Float>, radius: Float) {
-        guard radius > 0 else { return }
+        sweep(at: point, radius: radius, direction: .zero)
+    }
+
+    /// Mitten moving in `direction` (any length; the cursor velocity works): the snow is
+    /// kicked mostly that way. A zero direction throws it to both sides.
+    public func sweep(at point: SIMD2<Float>, radius: Float, direction: SIMD2<Float>) {
+        guard radius > 0, radius.isFinite, point.x.isFinite, point.y.isFinite else { return }
+        let length = direction.x.isFinite && direction.y.isFinite
+            ? (direction.x * direction.x + direction.y * direction.y).squareRoot()
+            : 0
+        let heading: SIMD2<Float>? = length > 0.01 ? direction / length : nil
         for entry in entries {
             let r = entry.rect
             guard point.x + radius >= r.x, point.x - radius <= r.maxX,
@@ -284,6 +319,13 @@ public final class SnowWorld {
             emitPieces(amount: removed, maxPieces: 12, ignoring: entry.id) { rng in
                 let offset = rng.signedUnit() * spread
                 let x = max(r.x, min(r.maxX, point.x + offset))
+                if let heading {
+                    let side = SIMD2<Float>(-heading.y, heading.x) * (rng.signedUnit() * 45)
+                    let forward: SIMD2<Float> = heading * rng.float(in: 90...200)
+                    let lift = SIMD2<Float>(0, -rng.float(in: 30...90))
+                    let velocity: SIMD2<Float> = forward + side + lift
+                    return (SIMD2<Float>(x, topY), velocity)
+                }
                 let direction: Float = offset >= 0 ? 1 : -1
                 let velocity = SIMD2<Float>(direction * rng.float(in: 70...170), -rng.float(in: 40...130))
                 return (SIMD2<Float>(x, topY), velocity)
@@ -291,20 +333,25 @@ public final class SnowWorld {
         }
     }
 
-    /// Shovel: removes all lying snow and all falling flakes. Snowfall continues.
+    /// «Очистить сугробы»: removes all lying snow, falling flakes, snowballs, snowmen,
+    /// dumped clumps and the shovel load. Snowfall continues.
     public func clearAll() {
         for entry in entries { entry.drift.clear() }
         flakes.removeAll(keepingCapacity: true)
+        snowballs.removeAll()
+        snowmen.removeAll()
+        clumps.removeAll()
+        shovelLoad = 0
         spawnAccumulator = 0
     }
 
     // MARK: - Debris
 
-    private var debrisLimit: Int {
+    var debrisLimit: Int {
         flakeCap + Int(Float(SnowWorld.debrisAllowance) * max(0.25, particleBudgetScale))
     }
 
-    private func emitDebris(at position: SIMD2<Float>, velocity: SIMD2<Float>, size: Float, ignoring id: Int?) {
+    func emitDebris(at position: SIMD2<Float>, velocity: SIMD2<Float>, size: Float, ignoring id: Int?) {
         guard flakes.count < debrisLimit else { return }
         let fall = rng.float(in: 60...110)
         flakes.append(Flake(
@@ -324,7 +371,7 @@ public final class SnowWorld {
 
     /// Splits `amount` pt² into clumps whose areas add up to roughly the same total.
     /// `make` returns each clump's position and velocity.
-    private func emitPieces(
+    func emitPieces(
         amount: Float,
         maxPieces: Int,
         ignoring id: Int?,
@@ -340,7 +387,7 @@ public final class SnowWorld {
     }
 
     /// Clumps sampled from where the drift actually has snow.
-    private func emitPieces(fromDrift drift: Drift, rect: Rect, amount: Float, maxPieces: Int, ignoring id: Int?) {
+    func emitPieces(fromDrift drift: Drift, rect: Rect, amount: Float, maxPieces: Int, ignoring id: Int?) {
         let peak = drift.peakHeight
         let width = drift.width
         emitPieces(amount: amount, maxPieces: maxPieces, ignoring: id) { rng in

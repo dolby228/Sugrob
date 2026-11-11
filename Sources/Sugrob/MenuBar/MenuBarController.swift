@@ -110,6 +110,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             toolMenu.addItem(item)
             toolItems.append(item)
         }
+        toolMenu.addItem(.separator())
+        let snowballHint = NSMenuItem(title: "⌥ + перетаскивание по сугробу — снежок", action: nil, keyEquivalent: "")
+        snowballHint.isEnabled = false
+        toolMenu.addItem(snowballHint)
         menu.addItem(submenuItem(title: "Инструмент", submenu: toolMenu))
 
         let clearItem = NSMenuItem(title: "Очистить сугробы", action: #selector(clearAll(_:)), keyEquivalent: "")

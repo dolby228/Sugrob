@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var tracker: WindowTracker?
     private var overlay: OverlayController?
     private var power: PowerMonitor?
+    private var mouse: MouseInput?
     /// Nil when Metal is unavailable; overlays then fall back to `DebugOverlayView`.
     private var pipelines: RenderPipelines?
 
@@ -41,6 +42,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menuBar = MenuBarController(settings: settings)
 
+        let mouse = MouseInput(settings: settings) { [weak self] in
+            self?.snowWorlds() ?? []
+        }
+        self.mouse = mouse
+
         tracker.onUpdate = { [weak self] _, _ in
             self?.pushSurfaces()
         }
@@ -60,9 +66,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Pause only hides the content; tracking keeps running so snow resumes in place.
         tracker.start()
         pushSurfaces()
+        mouse.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        mouse?.stop()
         tracker?.stop()
         overlay?.stop()
     }
@@ -90,9 +98,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch key {
         case .isPaused:
             overlay?.setPaused(settings.isPaused)
+            if settings.isPaused { mouse?.cancel() }
         case .showDebugOutlines:
             applyDebugOutlines()
-        case .snowfall, .windX, .windY, .tool:
+        case .tool:
+            mouse?.toolChanged()
+        case .snowfall, .windX, .windY:
             // Snowfall and wind reach each SnowView through its WorldSettingsBinder.
             break
         }
@@ -115,6 +126,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for entry in overlay.contents {
             (entry.content as? SnowView)?.applyPower(profile)
         }
+    }
+
+    /// The snow world of every screen that has a Metal view, for the mouse tools.
+    private func snowWorlds() -> [(screen: NSScreen, world: SnowWorld)] {
+        guard let overlay else { return [] }
+        var result: [(screen: NSScreen, world: SnowWorld)] = []
+        for entry in overlay.contents {
+            if let view = entry.content as? SnowView {
+                result.append((screen: entry.screen, world: view.world))
+            }
+        }
+        return result
     }
 
     private func pushSurfaces() {
