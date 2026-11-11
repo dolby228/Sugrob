@@ -9,9 +9,13 @@ private let log = Logger(subsystem: "dev.sugrob", category: "app")
 /// «Скопировать диагностику»: a JSON report for bug reports.
 ///
 /// Contains screens, on-screen window bounds (owner, pid, layer, bounds, alpha; never
-/// window titles), the Accessibility trust flag, settings and the status item frame.
+/// window titles), the Accessibility trust flag, settings, the status item frame and which
+/// screens have their snow hidden behind a full-screen system panel.
 @MainActor
 enum Diagnostics {
+    /// Window tracker whose covered-screen state goes into the report; set at launch.
+    static weak var tracker: WindowTracker?
+
     static func copyToPasteboard(settings: Settings, statusItem: [String: Any]) {
         let text = report(settings: settings, statusItem: statusItem)
         let pasteboard = NSPasteboard.general
@@ -29,6 +33,7 @@ enum Diagnostics {
             "axIsProcessTrusted": AXIsProcessTrusted(),
             "screens": NSScreen.screens.enumerated().map { screenInfo(index: $0.offset, screen: $0.element) },
             "windows": windowInfo(),
+            "coveredScreens": coveredScreens(),
             "dockPreferences": orNull(DockPreferences.read()?.description),
             "settings": settingsInfo(settings),
             "statusItem": statusItem,
@@ -95,6 +100,32 @@ enum Diagnostics {
                 result["bounds"] = rect(cgRect)
             } else {
                 result["bounds"] = NSNull()
+            }
+            return result
+        }
+    }
+
+    /// Per screen: whether a full-screen panel hides the snow there, and which window.
+    private static func coveredScreens() -> [[String: Any]] {
+        NSScreen.screens.map { screen in
+            let id = screen.displayID
+            var result: [String: Any] = ["displayID": orNull(id.map { Int($0) })]
+            guard let tracker else {
+                result["covered"] = NSNull()
+                return result
+            }
+            let window = id.flatMap { tracker.coveredDisplays[$0] }
+            result["covered"] = window != nil
+            if let window {
+                result["coveringWindow"] = [
+                    "number": Int(window.id),
+                    "owner": window.ownerName,
+                    "layer": window.layer,
+                    "alpha": window.alpha,
+                    "bounds": rect(window.bounds),
+                ] as [String: Any]
+            } else {
+                result["coveringWindow"] = NSNull()
             }
             return result
         }
