@@ -1,7 +1,7 @@
 /** Pointer and keyboard handling for the snow demo canvas. */
 import type { ViewState } from './render';
 import type { Ball } from './snowman';
-import { SHOVEL_HALF_WIDTH, type Intensity, type Surface, type WindDir, type World } from './world';
+import { MITTEN_RADIUS, SHOVEL_HALF_WIDTH, type Intensity, type Surface, type WindDir, type World } from './world';
 
 export interface InputCallbacks {
   onWind(dir: WindDir): void;
@@ -28,6 +28,11 @@ const PRESS_SCOOP_DEPTH = 8;
 const MAX_SCOOP_DEPTH = 6;
 /** Movement after which a shovel press counts as a drag, px. */
 const DRAG_SLOP = 4;
+/** The mitten knocks flakes out of the air only above this speed, px/s. */
+const FLAKE_SWAT_MIN_SPEED = 40;
+/** Pointer moves longer or later than this are jumps, not a swipe path. */
+const JUMP_DISTANCE = 300;
+const JUMP_TIME = 0.2;
 
 const LEVELS: Intensity[] = ['light', 'steady', 'blizzard'];
 
@@ -136,8 +141,16 @@ export class Input {
   private move(e: PointerEvent): void {
     this.pointerType = e.pointerType;
     const [x, y] = this.local(e);
+    const fromX = this.view.pointerX;
+    const fromY = this.view.pointerY;
+    const wasInside = this.view.pointerInside;
+    const since = (e.timeStamp - this.lastMoveT) / 1000;
     this.trackPointer(x, y, e.timeStamp, false);
     const m = this.mode;
+    if (m.kind === 'idle' || m.kind === 'mitten' || m.kind === 'pending') {
+      const jump = !wasInside || since > JUMP_TIME || Math.hypot(x - fromX, y - fromY) > JUMP_DISTANCE;
+      this.swatFlakes(jump ? x : fromX, jump ? y : fromY, x, y);
+    }
     if (m.kind === 'drag') {
       const dt = Math.max(0.001, (e.timeStamp - m.t) / 1000);
       m.t = e.timeStamp;
@@ -167,6 +180,15 @@ export class Input {
     this.view.pointerDown = false;
     if (e.pointerType !== 'mouse') this.view.pointerInside = false;
     this.updateCursor(ux, uy);
+  }
+
+  /** A moving mitten knocks falling flakes aside along its path, pressed or not. */
+  private swatFlakes(x0: number, y0: number, x1: number, y1: number): void {
+    if (this.world.tool !== 'mitten' || !this.running) return;
+    const speed = Math.hypot(this.velX, this.velY);
+    if (speed <= FLAKE_SWAT_MIN_SPEED) return;
+    const radius = MITTEN_RADIUS * Math.max(0.8, Math.min(1.6, 0.8 + speed / 1200));
+    this.world.knockFlakes(x0, y0, x1, y1, radius, this.velX, this.velY);
   }
 
   /** Scrapes the drift along the drag path, about as deep per px travelled at any speed. */
