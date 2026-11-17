@@ -38,7 +38,7 @@ Clicks pass through the snow: Sugrob watches the mouse with global monitors, whi
 
 ## Privacy
 
-Sugrob reads only window bounds via `CGWindowListCopyWindowInfo`. It does not read window contents or titles, needs no Screen Recording permission and makes no network requests. Accessibility is optional and asked for only when you choose **Точный размер Dock…**: it is used to read the Dock's tile frames, nothing else. Without it the Dock width is estimated from the Dock preferences. Builds are signed ad-hoc, so macOS ties the grant to the exact binary: after updating Sugrob, remove the old entry from Privacy & Security → Accessibility and add it again.
+Sugrob reads only window bounds via `CGWindowListCopyWindowInfo`. It does not read window contents or titles, needs no Screen Recording permission and makes no network requests. Accessibility is optional: Sugrob offers it once, a few seconds after the first launch, and otherwise asks only when you choose **Точный размер Dock…** or **Разрешить…**. It is used to read the Dock's tile frames, nothing else. Without it the Dock width is estimated from the Dock preferences. Builds are signed ad-hoc with a designated requirement on the bundle identifier, so the grant survives updates. A grant made for an older build (tied to its cdhash) no longer applies: the settings window then offers **Сбросить и запросить снова**.
 
 ## Build
 
