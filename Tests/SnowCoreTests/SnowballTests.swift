@@ -59,6 +59,33 @@ final class SnowballTests: XCTestCase {
         XCTAssertTrue(bare.snowballs.isEmpty)
     }
 
+    func testBeginRollAtCapBurstsOldestRestingBall() {
+        let world = snowyWorld()
+        for i in 0..<SnowWorld.maxSnowballs {
+            var ball = Snowball(id: 1000 + i, center: SIMD2(120 + Float(i) * 14, 282), radius: 5, state: .resting)
+            ball.surfaceID = window.id
+            ball.localX = ball.center.x - window.rect.x
+            world.snowballs.append(ball)
+        }
+        let point = SIMD2<Float>(480, 292)
+        let id = world.beginRoll(at: point)
+        XCTAssertNotNil(id)
+        XCTAssertEqual(world.snowballs.count, SnowWorld.maxSnowballs)
+        XCTAssertNil(ball(world, 1000), "the oldest resting ball made room")
+        XCTAssertNotNil(ball(world, 1001))
+        XCTAssertFalse(world.flakes.isEmpty, "it burst into debris")
+    }
+
+    func testBeginRollAtCapRefusesWithoutRestingBall() {
+        let world = snowyWorld()
+        for i in 0..<SnowWorld.maxSnowballs {
+            world.snowballs.append(Snowball(id: 1000 + i, center: SIMD2(300, 50), radius: 5, state: .falling))
+        }
+        let point = SIMD2<Float>(480, 292)
+        XCTAssertNil(world.beginRoll(at: point))
+        XCTAssertEqual(world.snowballs.count, SnowWorld.maxSnowballs)
+    }
+
     func testRollingConservesSnowAndGrowsBall() {
         let world = snowyWorld()
         let before = world.totalSnow
