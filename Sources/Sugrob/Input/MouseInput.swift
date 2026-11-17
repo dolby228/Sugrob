@@ -12,12 +12,16 @@ private let log = Logger(subsystem: "dev.sugrob", category: "input")
 ///
 /// Working the snow must not also select text or drag the window underneath, so the
 /// overlay of the cursor's screen takes the mouse (dynamic capture) while:
-/// - the shovel is over a drift with snow, or carries a load;
-/// - ⌥ Option is held over a drift with snow;
+/// - the shovel is over a drift with snow, or carries a load over a window's top edge;
+/// - ⌥ Option is held where a snowball can be started (enough snow, see
+///   `SnowWorld.canBeginRoll`);
 /// - a press that started captured has not been released yet.
 /// The captured overlay's `SnowView` then feeds its events into the same handler. The
 /// mitten only hovers and never captures. Capture is re-checked on every move and
-/// modifier change, and by a watchdog timer while it is on.
+/// modifier change, and by a watchdog timer while it is on. Without Accessibility the
+/// global monitor gets no `flagsChanged`, so while the cursor is over snow (or the
+/// shovel carries a load) and nothing is captured, a hover timer polls the modifiers.
+/// A load carried away from any window edge for `loadDropDelay` falls off as a clump.
 ///
 /// - Варежка (mitten): moving the cursor with no button pressed sweeps snow off drifts,
 ///   kicking it in the direction of movement.
@@ -40,6 +44,14 @@ final class MouseInput {
     static let captureMinHeight: Float = 0.5
     /// How often capture is re-checked while it is on and no events may arrive.
     static let watchdogInterval: TimeInterval = 0.1
+    /// A cursor move longer than this, or after a longer pause, is a jump: tools act only
+    /// at the new point instead of along a line from the old one.
+    static let maxPathDistance: Float = 300
+    static let maxPathGap: TimeInterval = 0.2
+    /// How often modifiers are polled while the cursor hovers over snow uncaptured.
+    static let hoverInterval: TimeInterval = 0.1
+    /// A shovel load carried away from snow this long falls off on its own.
+    static let loadDropDelay: TimeInterval = 4
 
     /// Asks the overlay of `screen` to take the mouse; nil gives it back everywhere.
     var onCaptureChange: (@MainActor (_ screen: NSScreen?) -> Void)?
@@ -126,6 +138,11 @@ final class MouseInput {
     /// The current press went to the captured overlay; capture holds until it is released.
     private var capturedPress = false
     private var watchdog: Timer?
+    private var hoverTimer: Timer?
+    /// Seconds between the previous pointer event and the current one.
+    private var eventGap: TimeInterval = .infinity
+    /// When the carried shovel load left the last window edge.
+    private var loadAwaySince: TimeInterval?
 
     init(settings: Settings, worlds: @escaping WorldProvider) {
         self.settings = settings
@@ -169,6 +186,7 @@ final class MouseInput {
         capturedPress = false
         dumpCarriedLoad()
         setCapture(nil)
+        stopHoverPoll()
     }
 
     /// Switching away from the shovel drops what it carries.
@@ -219,6 +237,7 @@ final class MouseInput {
     private func process(_ event: PointerEvent, located: Target?) {
         let type = event.kind
         let cocoa = event.location
+        eventGap = lastCocoa == nil ? .infinity : event.timestamp - lastTimestamp
         trackVelocity(cocoa, timestamp: event.timestamp, reset: type == .down)
         defer { lastCocoa = cocoa }
         defer {
@@ -273,6 +292,10 @@ final class MouseInput {
     }
 
     private func mouseDown(_ target: Target, option: Bool) {
+        // The release of a ball still held may have been lost; never leave it frozen.
+        if case .snowball(let world, _, let id) = drag {
+            world.releaseBall(id, velocity: .zero)
+        }
         drag = .idle
         if option {
             if let id = target.world.beginRoll(at: target.point) {
@@ -339,6 +362,8 @@ final class MouseInput {
             if captureDisplay != nil { NSCursor.closedHand.set() }
             return
         }
+        defer { updateHoverPoll(at: target) }
+        dropLoadIfAway(at: target)
         // A button held down for another app (dragging a window over a drift).
         if NSEvent.pressedMouseButtons & 1 != 0 {
             setCapture(nil)
@@ -351,11 +376,24 @@ final class MouseInput {
         setCapture(target.screen)
     }
 
+    private var carriesLoad: Bool {
+        guard settings.tool == .shovel, let carrier = shovelWorld else { return false }
+        return carrier.shovelLoad > 0
+    }
+
     private func wantsCapture(_ target: Target) -> Bool {
         guard !settings.isPaused else { return false }
         if isCaptureBlocked?(target.screen, target.point) ?? false { return false }
-        if settings.tool == .shovel, let carrier = shovelWorld, carrier.shovelLoad > 0 { return true }
-        guard settings.tool == .shovel || optionDown else { return false }
+        // A load is dumped with a click on a window edge; elsewhere clicks stay ordinary
+        // (the press still dumps the load, but the app under the cursor gets it too).
+        if carriesLoad, target.world.surfaceEdgeID(at: target.point, tolerance: Self.captureTolerance) != nil {
+            return true
+        }
+        // Only where `beginRoll` will actually start a ball, so the click is not eaten.
+        if optionDown, target.world.canBeginRoll(at: target.point, tolerance: Self.captureTolerance) {
+            return true
+        }
+        guard settings.tool == .shovel else { return false }
         return target.world.driftSurfaceID(
             at: target.point,
             tolerance: Self.captureTolerance,
@@ -418,6 +456,66 @@ final class MouseInput {
         updateCapture(at: locate(location))
     }
 
+    /// Polls the modifiers while the cursor is over snow (or the shovel carries a load) and
+    /// nothing is captured: `flagsChanged` does not reach the global monitor without
+    /// Accessibility, so pressing ⌥ over a still cursor would otherwise do nothing.
+    private func updateHoverPoll(at target: Target?) {
+        var wanted = false
+        if captureDisplay == nil, !settings.isPaused, let target {
+            wanted = carriesLoad
+                || target.world.canBeginRoll(at: target.point, tolerance: Self.captureTolerance)
+        }
+        if wanted { startHoverPoll() } else { stopHoverPoll() }
+    }
+
+    private func startHoverPoll() {
+        guard hoverTimer == nil else { return }
+        let timer = Timer(timeInterval: Self.hoverInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.hoverTick()
+            }
+        }
+        timer.tolerance = Self.hoverInterval * 0.2
+        RunLoop.main.add(timer, forMode: .common)
+        hoverTimer = timer
+    }
+
+    private func stopHoverPoll() {
+        hoverTimer?.invalidate()
+        hoverTimer = nil
+    }
+
+    private func hoverTick() {
+        guard captureDisplay == nil else {
+            stopHoverPoll()
+            return
+        }
+        optionDown = NSEvent.modifierFlags.contains(.option)
+        updateCapture(at: locate(NSEvent.mouseLocation))
+    }
+
+    /// A load carried away from every window edge for `loadDropDelay` falls off the
+    /// shovel as one clump, so it does not hang on the cursor forever.
+    private func dropLoadIfAway(at target: Target?) {
+        guard carriesLoad else {
+            loadAwaySince = nil
+            return
+        }
+        if let target, target.world.surfaceEdgeID(at: target.point, tolerance: Self.captureTolerance) != nil {
+            loadAwaySince = nil
+            return
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard let since = loadAwaySince else {
+            loadAwaySince = now
+            return
+        }
+        guard now - since >= Self.loadDropDelay else { return }
+        log.debug("shovel load carried away from snow, dropping it")
+        loadAwaySince = nil
+        dumpCarriedLoad()
+    }
+
     // MARK: Tools
 
     private func sweepAlongPath(to target: Target) {
@@ -429,7 +527,7 @@ final class MouseInput {
     }
 
     private func scoopAlongPath(to target: Target) {
-        guard let from = lastPoint, lastWorld === target.world else {
+        guard let from = lastPoint, lastWorld === target.world, !isJump(to: target) else {
             target.world.scoop(at: target.point, depth: 1)
             return
         }
@@ -444,9 +542,10 @@ final class MouseInput {
     }
 
     /// Points from the previous cursor position to the current one, `spacing` apart,
-    /// ending at the current one. Just the current point after a jump between screens.
+    /// ending at the current one. Just the current point after a jump between screens, a
+    /// cursor warp or a long pause: the old position is stale then.
     private func pathSamples(to target: Target, spacing: Float) -> [SIMD2<Float>] {
-        guard let from = lastPoint, lastWorld === target.world else { return [target.point] }
+        guard let from = lastPoint, lastWorld === target.world, !isJump(to: target) else { return [target.point] }
         let d = target.point - from
         let distance = (d.x * d.x + d.y * d.y).squareRoot()
         guard distance > 0.01 else { return [] }
@@ -458,6 +557,14 @@ final class MouseInput {
             samples.append(from + d * t)
         }
         return samples
+    }
+
+    /// True if the cursor did not travel to `target` continuously from `lastPoint`.
+    private func isJump(to target: Target) -> Bool {
+        guard let from = lastPoint else { return true }
+        if eventGap > Self.maxPathGap { return true }
+        let d = target.point - from
+        return (d.x * d.x + d.y * d.y).squareRoot() > Self.maxPathDistance
     }
 
     /// Keeps the blade (and its load) under the cursor, on whichever screen it is.

@@ -325,29 +325,45 @@ public final class SnowWorld {
             ? (direction.x * direction.x + direction.y * direction.y).squareRoot()
             : 0
         let heading: SIMD2<Float>? = length > 0.01 ? direction / length : nil
-        for entry in entries {
+        for (k, entry) in entries.enumerated() {
             let r = entry.rect
-            guard point.x + radius >= r.x, point.x - radius <= r.maxX,
-                  point.y + radius >= r.y - entry.drift.maxHeight, point.y - radius <= r.y
-            else { continue }
-            let removed = entry.drift.sweep(center: point - r.origin, radius: radius)
-            guard removed > 0 else { continue }
-            let topY = min(point.y, r.y - 1)
-            let spread = radius * 0.8
-            emitPieces(amount: removed, maxPieces: 12, ignoring: entry.id) { rng in
-                let offset = rng.signedUnit() * spread
-                let x = max(r.x, min(r.maxX, point.x + offset))
-                if let heading {
-                    let side = SIMD2<Float>(-heading.y, heading.x) * (rng.signedUnit() * 45)
-                    let forward: SIMD2<Float> = heading * rng.float(in: 90...200)
-                    let lift = SIMD2<Float>(0, -rng.float(in: 30...90))
-                    let velocity: SIMD2<Float> = forward + side + lift
-                    return (SIMD2<Float>(x, topY), velocity)
-                }
-                let direction: Float = offset >= 0 ? 1 : -1
-                let velocity = SIMD2<Float>(direction * rng.float(in: 70...170), -rng.float(in: 40...130))
+            if point.x + radius >= r.x, point.x - radius <= r.maxX,
+               point.y + radius >= r.y - entry.drift.maxHeight, point.y - radius <= r.y,
+               !isSweepCovered(entry, index: k, near: point.x) {
+                sweepDrift(entry, at: point, radius: radius, heading: heading)
+            }
+            // A window under the cursor hides everything behind it.
+            if r.contains(point) { break }
+        }
+    }
+
+    /// True if the part of the drift under `x` is hidden behind a window further front.
+    private func isSweepCovered(_ entry: Entry, index: Int, near x: Float) -> Bool {
+        let r = entry.rect
+        let localX = max(0, min(r.width, x - r.x))
+        let h = max(1, entry.drift.height(atX: localX))
+        return isCovered(SIMD2(r.x + localX, r.y - h * 0.5), byFirst: index)
+    }
+
+    private func sweepDrift(_ entry: Entry, at point: SIMD2<Float>, radius: Float, heading: SIMD2<Float>?) {
+        let r = entry.rect
+        let removed = entry.drift.sweep(center: point - r.origin, radius: radius)
+        guard removed > 0 else { return }
+        let topY = min(point.y, r.y - 1)
+        let spread = radius * 0.8
+        emitPieces(amount: removed, maxPieces: 12, ignoring: entry.id) { rng in
+            let offset = rng.signedUnit() * spread
+            let x = max(r.x, min(r.maxX, point.x + offset))
+            if let heading {
+                let side = SIMD2<Float>(-heading.y, heading.x) * (rng.signedUnit() * 45)
+                let forward: SIMD2<Float> = heading * rng.float(in: 90...200)
+                let lift = SIMD2<Float>(0, -rng.float(in: 30...90))
+                let velocity: SIMD2<Float> = forward + side + lift
                 return (SIMD2<Float>(x, topY), velocity)
             }
+            let direction: Float = offset >= 0 ? 1 : -1
+            let velocity = SIMD2<Float>(direction * rng.float(in: 70...170), -rng.float(in: 40...130))
+            return (SIMD2<Float>(x, topY), velocity)
         }
     }
 

@@ -231,6 +231,30 @@ final class SnowWorldTests: XCTestCase {
         XCTAssertEqual(backDrift.height(atX: 400), 0)
     }
 
+    func testSweepIgnoresSnowHiddenBehindFrontWindow() {
+        let world = SnowWorld(bounds: screen, seed: 8)
+        world.particleBudgetScale = 0
+        let front = Surface(id: 10, rect: Rect(x: 200, y: 200, width: 400, height: 300))
+        let back = Surface(id: 20, rect: Rect(x: 0, y: 350, width: 800, height: 200))
+        world.setSurfaces([front, back])
+        let drift = world.drifts[20]!
+        for x in stride(from: Float(60), through: 140, by: 2) { drift.deposit(atX: x, amount: 20) }
+        for x in stride(from: Float(360), through: 440, by: 2) { drift.deposit(atX: x, amount: 20) }
+        let hidden = drift.height(atX: 400)
+        XCTAssertGreaterThan(hidden, 2)
+
+        // Inside the front window, over the hidden part of the back drift.
+        world.sweep(at: SIMD2(400, 346), radius: 18, direction: SIMD2(300, 0))
+        XCTAssertEqual(drift.height(atX: 400), hidden, accuracy: 1e-4)
+        XCTAssertTrue(world.flakes.isEmpty, "no debris thrown out of the front window")
+
+        // The uncovered part still sweeps.
+        let visible = drift.height(atX: 100)
+        world.sweep(at: SIMD2(100, 346), radius: 18, direction: SIMD2(300, 0))
+        XCTAssertLessThan(drift.height(atX: 100), visible)
+        XCTAssertFalse(world.flakes.isEmpty)
+    }
+
     /// Snow sliding off a full drift must not fall as a steady stream right at the window
     /// sides: from a distance that reads as a dotted line running down each edge.
     func testNoFlakeStreamsAlongWindowSides() {

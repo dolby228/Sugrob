@@ -74,13 +74,36 @@ extension SnowWorld {
     }
 
     /// Moves whatever is on the shovel over to `other` (cursor crossed to another screen).
+    /// What does not fit on `other`'s shovel is dumped here where the blade was.
     public func transferShovelLoad(to other: SnowWorld) {
         guard other !== self, shovelLoad > 0 else { return }
         let moved = min(shovelLoad, other.shovelRoom)
         other.shovelLoad += moved
-        shovelLoad = 0
+        shovelLoad = max(0, shovelLoad - moved)
         other.shovelPosition = shovelPosition
+        if shovelLoad > 0.01, let point = shovelPosition {
+            dump(at: point, velocity: .zero)
+        }
         shovelPosition = nil
+    }
+
+    /// Front-most surface whose top edge (bare or snowy) is under `point`, within
+    /// `tolerance` points, and not hidden behind a window in front. This is where a
+    /// shovel load can be dumped onto a drift.
+    public func surfaceEdgeID(at point: SIMD2<Float>, tolerance: Float = 12) -> Int? {
+        guard point.x.isFinite, point.y.isFinite else { return nil }
+        for (k, entry) in entries.enumerated() {
+            let r = entry.rect
+            guard point.x >= r.x, point.x <= r.maxX else { continue }
+            let h = entry.drift.height(atX: point.x - r.x)
+            if point.y >= r.y - h - tolerance, point.y <= r.y + tolerance,
+               !isCovered(SIMD2(point.x, r.y - max(h, 1) * 0.5), byFirst: k) {
+                return entry.id
+            }
+            // A window under the cursor hides everything behind it.
+            if r.contains(point) { return nil }
+        }
+        return nil
     }
 
     // MARK: - Simulation
