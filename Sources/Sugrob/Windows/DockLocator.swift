@@ -10,7 +10,8 @@ private let log = Logger(subsystem: "dev.sugrob", category: "tracker")
 /// Dock is on; the tiles themselves are usually much narrower. Sources, best first:
 /// 1. The union of the Dock's `AXList` elements (or of its `AXDockItem`s) lying in the
 ///    strip, padded to the Dock glass. Needs Accessibility, which is requested only from
-///    the settings window or the status menu («Точный размер Dock…»).
+///    the settings window or the status menu («Точный размер Dock…»). The AX tree is
+///    walked off the main thread (`DockAccessibility`); a failed walk keeps the last tiles.
 /// 2. A Dock-owned window at Dock level that lies in the strip and is smaller than it.
 /// 3. An estimate from the `com.apple.dock` preferences and the running apps (see
 ///    `DockPreferences`).
@@ -39,15 +40,17 @@ final class DockLocator {
     static let bundleID = "com.apple.dock"
     static let ownerName = "Dock"
     static let dockLevel = Int(CGWindowLevelForKey(.dockWindow))
-    /// Accessibility, preferences and the Dock pid are re-read at most this often.
+    /// Preferences and the Dock pid are re-read at most this often.
     static let slowRefreshInterval: TimeInterval = 1
+    /// The AX tree is walked this often after a walk that changed the tiles…
+    static let accessibilityActiveInterval: TimeInterval = 1
+    /// …and this often while nothing changes. Launches, quits, preference and strip
+    /// changes and a trust change trigger a walk at once.
+    static let accessibilityIdleInterval: TimeInterval = 4
     /// Share of the strip used when nothing better is known.
     static let guessedShare: CGFloat = 0.55
     /// The AX tile frames cover the icons; the Dock glass reaches this much further out.
     static let accessibilityPadding: CGFloat = 5
-    /// How deep the AX tree of the Dock is searched, and how many elements at most.
-    static let accessibilityMaxDepth = 4
-    static let accessibilityMaxElements = 400
     /// After an app launches or quits the Dock animates its tiles: re-read after these delays.
     static let launchRefreshDelays: [TimeInterval] = [0.3, 1.3]
     /// The menu bar is a window of this owner at the main menu level.
@@ -69,6 +72,17 @@ final class DockLocator {
     private var preferences: DockPreferences?
     /// Dock tile frames read via Accessibility, CG global.
     private(set) var accessibilityTiles: AccessibilityTiles?
+    /// A walk is running on `DockAccessibility.queue`; never two at once.
+    private var walkInFlight = false
+    /// The next slow refresh walks the AX tree regardless of the interval.
+    private var walkRequested = true
+    private var lastWalkStart: TimeInterval = -.infinity
+    private var walkInterval = DockLocator.accessibilityActiveInterval
+    /// The last walk's failure, logged once per change.
+    private var walkFailure: DockAccessibility.Failure?
+    private var lastWalk: (elements: Int, duration: TimeInterval)?
+    /// Strips the last walk was asked about, CG global; a change triggers a walk.
+    private var walkStrips: [DockAccessibility.Strip] = []
     private var observingChanges = false
     private var pendingRefreshes: [DispatchWorkItem] = []
     private var loggedDockWindows: [WindowListEntry] = []
@@ -81,7 +95,8 @@ final class DockLocator {
     /// `windows` the ordinary (layer 0) windows front to back.
     func locate(in list: [WindowListEntry], windows: [TrackedWindow]) -> Result {
         observeChangesIfNeeded()
-        refreshSlowSources()
+        let now = ProcessInfo.processInfo.systemUptime
+        refreshSlowSources(now: now)
         let dockWindows = list.filter { isDockOwned($0) }
         logDockWindows(dockWindows)
 
@@ -272,6 +287,10 @@ final class DockLocator {
             "screens": screens,
             "dockPID": orNull(dockPID.map { Int($0) }),
             "accessibilityTrusted": AXIsProcessTrusted(),
+            "accessibilityError": orNull(walkFailure?.description),
+            "accessibilityWalkElements": orNull(lastWalk?.elements),
+            "accessibilityWalkMs": orNull(lastWalk.map { Int(($0.duration * 1000).rounded()) }),
+            "accessibilityWalkInterval": walkInterval,
             "accessibilityLists": lists,
             "accessibilityItems": items,
             "estimate": orNull(preferences?.diagnostics),
@@ -320,7 +339,7 @@ final class DockLocator {
     }
 
     /// At least half of the strip's thickness is covered by `rect`.
-    static func liesInStrip(_ rect: CGRect, strip: CGRect, edge: Edge) -> Bool {
+    nonisolated static func liesInStrip(_ rect: CGRect, strip: CGRect, edge: Edge) -> Bool {
         let overlap = rect.intersection(strip)
         guard !overlap.isNull, !overlap.isEmpty else { return false }
         switch edge {
@@ -329,7 +348,7 @@ final class DockLocator {
         }
     }
 
-    static func isShorterThanStrip(_ rect: CGRect, strip: CGRect, edge: Edge) -> Bool {
+    nonisolated static func isShorterThanStrip(_ rect: CGRect, strip: CGRect, edge: Edge) -> Bool {
         switch edge {
         case .bottom: return rect.width < strip.width * 0.98
         case .left, .right: return rect.height < strip.height * 0.98
@@ -359,8 +378,7 @@ final class DockLocator {
 
     // MARK: Slow sources
 
-    private func refreshSlowSources() {
-        let now = ProcessInfo.processInfo.systemUptime
+    private func refreshSlowSources(now: TimeInterval) {
         guard now - lastSlowRefresh >= Self.slowRefreshInterval else { return }
         lastSlowRefresh = now
 
@@ -371,27 +389,96 @@ final class DockLocator {
                 .first?.processIdentifier
             let pid = dockPID.map { Int($0) } ?? -1
             log.debug("dock pid \(pid)")
+            walkRequested = true
         }
 
         let preferences = DockPreferences.read()
         if preferences != self.preferences {
             self.preferences = preferences
             log.debug("dock preferences \(String(describing: preferences), privacy: .public)")
+            walkRequested = true
         }
 
-        var tiles: AccessibilityTiles?
-        if let pid = dockPID, AXIsProcessTrusted() {
-            tiles = Self.readAccessibilityTiles(dockPID: pid)
+        guard let pid = dockPID, AXIsProcessTrusted() else {
+            if accessibilityTiles != nil {
+                accessibilityTiles = nil
+                log.debug("dock accessibility tiles nil")
+            }
+            walkFailure = nil
+            return
         }
-        if tiles != accessibilityTiles {
-            accessibilityTiles = tiles
-            log.debug("dock accessibility tiles \(String(describing: tiles), privacy: .public)")
+        let strips = Self.currentStrips()
+        if strips != walkStrips {
+            walkRequested = true
+        }
+        guard !walkInFlight else { return }
+        guard walkRequested || now - lastWalkStart >= walkInterval else { return }
+        startWalk(dockPID: pid, strips: strips, now: now)
+    }
+
+    /// The reserved strips of every screen, CG global, for `DockAccessibility`.
+    private static func currentStrips() -> [DockAccessibility.Strip] {
+        let primaryHeight = Coordinates.primaryScreenHeight
+        return NSScreen.screens.compactMap { screen in
+            guard let reserved = reservedStrip(for: screen) else { return nil }
+            let (strip, edge) = reserved
+            let rect = Coordinates.cgRect(fromScreenLocal: strip, screenFrame: screen.frame, primaryHeight: primaryHeight)
+            return DockAccessibility.Strip(rect: rect, edge: edge)
         }
     }
 
-    /// Makes the next poll re-read the slow sources.
+    private func startWalk(dockPID: pid_t, strips: [DockAccessibility.Strip], now: TimeInterval) {
+        walkInFlight = true
+        walkRequested = false
+        lastWalkStart = now
+        walkStrips = strips
+        DockAccessibility.queue.async {
+            let outcome = DockAccessibility.walk(dockPID: dockPID, strips: strips)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self.finishWalk(outcome, startedAt: now)
+                }
+            }
+        }
+    }
+
+    private func finishWalk(_ outcome: DockAccessibility.Outcome, startedAt: TimeInterval) {
+        walkInFlight = false
+        lastWalk = (outcome.elements, outcome.duration)
+        if outcome.failure != walkFailure {
+            if let failure = outcome.failure {
+                log.info("dock accessibility read failed: \(failure.description, privacy: .public), keeping the last frame")
+            } else {
+                log.info("dock accessibility read works again")
+            }
+            walkFailure = outcome.failure
+        }
+        defer {
+            // Asked for another walk while this one ran: do it on the next poll.
+            if walkRequested { lastSlowRefresh = -.infinity }
+        }
+        if let failure = outcome.failure {
+            // Access gone (revoked, or a new build with another cdhash): the tiles are stale.
+            if failure == .error(.apiDisabled) {
+                accessibilityTiles = nil
+            }
+            walkInterval = Self.accessibilityActiveInterval
+            return
+        }
+        guard AXIsProcessTrusted() else { return }
+        if outcome.tiles != accessibilityTiles {
+            accessibilityTiles = outcome.tiles
+            walkInterval = Self.accessibilityActiveInterval
+            log.debug("dock accessibility tiles \(String(describing: outcome.tiles), privacy: .public) in \(Int(outcome.duration * 1000)) ms")
+        } else {
+            walkInterval = Self.accessibilityIdleInterval
+        }
+    }
+
+    /// Makes the next poll re-read the slow sources and walk the AX tree.
     func invalidateSlowSources() {
         lastSlowRefresh = -.infinity
+        walkRequested = true
     }
 
     /// Tiles appear and disappear as apps launch and quit; the Dock animates the change,
@@ -477,73 +564,6 @@ final class DockLocator {
             result = result.union(frame)
         }
         return result
-    }
-
-    /// Walks the Dock's AX tree (a few levels deep: on newer macOS the list can be nested)
-    /// and collects the frames of every `AXList` and `AXDockItem`. Nil when nothing is found.
-    /// Needs Accessibility; never asks for it.
-    static func readAccessibilityTiles(dockPID: pid_t) -> AccessibilityTiles? {
-        let app = AXUIElementCreateApplication(dockPID)
-        var tiles = AccessibilityTiles()
-        var budget = accessibilityMaxElements
-        collect(app, depth: 0, into: &tiles, budget: &budget)
-        return tiles.lists.isEmpty && tiles.items.isEmpty ? nil : tiles
-    }
-
-    private static func collect(_ element: AXUIElement, depth: Int, into tiles: inout AccessibilityTiles, budget: inout Int) {
-        guard budget > 0 else { return }
-        budget -= 1
-        _ = AXUIElementSetMessagingTimeout(element, 0.25)
-        if depth > 0 {
-            switch stringAttribute("AXRole", of: element) {
-            case "AXList":
-                if let frame = frame(of: element) { tiles.lists.append(frame) }
-            case "AXDockItem":
-                // Items have no tiles inside.
-                if let frame = frame(of: element) { tiles.items.append(frame) }
-                return
-            default:
-                break
-            }
-        }
-        guard depth < accessibilityMaxDepth else { return }
-        var childrenValue: CFTypeRef?
-        guard
-            AXUIElementCopyAttributeValue(element, "AXChildren" as CFString, &childrenValue) == .success,
-            let children = childrenValue as? [AXUIElement]
-        else { return }
-        for child in children {
-            collect(child, depth: depth + 1, into: &tiles, budget: &budget)
-        }
-    }
-
-    private static func stringAttribute(_ name: String, of element: AXUIElement) -> String? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
-        return value as? String
-    }
-
-    /// `AXPosition` + `AXSize`, nil if missing or empty.
-    private static func frame(of element: AXUIElement) -> CGRect? {
-        var positionValue: CFTypeRef?
-        var sizeValue: CFTypeRef?
-        guard
-            AXUIElementCopyAttributeValue(element, "AXPosition" as CFString, &positionValue) == .success,
-            AXUIElementCopyAttributeValue(element, "AXSize" as CFString, &sizeValue) == .success,
-            let positionRef = positionValue, let sizeRef = sizeValue,
-            CFGetTypeID(positionRef) == AXValueGetTypeID(),
-            CFGetTypeID(sizeRef) == AXValueGetTypeID()
-        else { return nil }
-
-        var origin = CGPoint.zero
-        var size = CGSize.zero
-        // The type ids were checked above, so these casts cannot fail.
-        guard
-            AXValueGetValue(positionRef as! AXValue, .cgPoint, &origin),
-            AXValueGetValue(sizeRef as! AXValue, .cgSize, &size),
-            size.width > 0, size.height > 0
-        else { return nil }
-        return CGRect(origin: origin, size: size)
     }
 
     private func logDockWindows(_ windows: [WindowListEntry]) {
