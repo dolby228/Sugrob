@@ -104,12 +104,15 @@ final class DockLocator {
     private var lastFrames: [Int: CGRect] = [:]
 
     /// Dock frames for every screen where the Dock is shown. `list` is the raw window list,
-    /// `windows` the ordinary (layer 0) windows front to back.
-    func locate(in list: [WindowListEntry], windows: [TrackedWindow]) -> Result {
+    /// `windows` the ordinary (layer 0) windows front to back. With `refreshSlowSources`
+    /// false (snow paused or hidden) only cached preferences and AX tiles are used.
+    func locate(in list: [WindowListEntry], windows: [TrackedWindow], refreshSlowSources refresh: Bool = true) -> Result {
         observeChangesIfNeeded()
         let now = ProcessInfo.processInfo.systemUptime
         updateMagnificationHold(now: now)
-        refreshSlowSources(now: now)
+        if refresh {
+            refreshSlowSources(now: now)
+        }
         let dockWindows = list.filter { isDockOwned($0) }
         logDockWindows(dockWindows)
 

@@ -23,7 +23,13 @@ final class WindowTracker: NSObject {
     /// Current windows, front to back, in CG global coordinates.
     private(set) var windows: [TrackedWindow] = []
 
+    /// Normal poll interval.
     let interval: TimeInterval
+    /// Poll interval while the caller asked for a reduced rate (snow paused).
+    static let reducedInterval: TimeInterval = 1
+    /// Poll interval while every screen is covered by a system panel: slower, but quick
+    /// enough to bring the snow back when the panel goes away.
+    static let coveredInterval: TimeInterval = 0.3
     static let minimumSize = CGSize(width: 40, height: 40)
     /// Insets smaller than this (e.g. the sliver left by an auto-hidden Dock) are ignored.
     static let minimumDockInset: CGFloat = 8
@@ -73,9 +79,14 @@ final class WindowTracker: NSObject {
     private var optionWasDown = false
     private var lastOptionChange: TimeInterval = -.infinity
     private let dockLocator = DockLocator()
+    /// Set by `setReducedRate`.
+    private var reducedRate = false
+    /// Interval of the running timer.
+    private(set) var currentInterval: TimeInterval
 
     init(interval: TimeInterval = 0.1) {
         self.interval = interval
+        self.currentInterval = interval
         super.init()
     }
 
@@ -83,6 +94,52 @@ final class WindowTracker: NSObject {
 
     func start() {
         guard timer == nil else { return }
+        currentInterval = wantedInterval
+        schedule()
+        log.debug("tracker started, interval \(self.currentInterval, privacy: .public)s")
+        poll()
+    }
+
+    /// Snow paused: poll about once a second and leave the Dock's preferences and AX tree
+    /// alone. Switching back polls at once so the surfaces are fresh when the snow returns.
+    func setReducedRate(_ reduced: Bool) {
+        guard reduced != reducedRate else { return }
+        reducedRate = reduced
+        log.debug("tracker rate \(reduced ? "reduced" : "normal", privacy: .public)")
+        updateRate()
+        if !reduced, isRunning {
+            poll()
+        }
+    }
+
+    /// Every screen is hidden behind a system panel: nothing is drawn anywhere.
+    private var allScreensCovered: Bool {
+        guard !coveredDisplays.isEmpty else { return false }
+        return NSScreen.screens.allSatisfy { screen in
+            guard let id = screen.displayID else { return false }
+            return coveredDisplays[id] != nil
+        }
+    }
+
+    private var wantedInterval: TimeInterval {
+        if reducedRate { return max(interval, Self.reducedInterval) }
+        if allScreensCovered { return max(interval, Self.coveredInterval) }
+        return interval
+    }
+
+    /// Reschedules the timer if the wanted interval changed.
+    private func updateRate() {
+        let wanted = wantedInterval
+        guard wanted != currentInterval else { return }
+        currentInterval = wanted
+        guard timer != nil else { return }
+        timer?.invalidate()
+        schedule()
+        log.debug("tracker interval \(wanted, privacy: .public)s")
+    }
+
+    private func schedule() {
+        let interval = currentInterval
         let timer = Timer(
             timeInterval: interval,
             target: self,
@@ -94,8 +151,6 @@ final class WindowTracker: NSObject {
         // `.common` keeps polling while a menu is open or a window is being dragged.
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
-        log.debug("tracker started, interval \(self.interval, privacy: .public)s")
-        poll()
     }
 
     func stop() {
@@ -116,7 +171,11 @@ final class WindowTracker: NSObject {
         let events = Self.diff(old: windows, new: current)
         let orderChanged = events.isEmpty && current.map(\.id) != windows.map(\.id)
 
-        let dock = dockLocator.locate(in: list, windows: current)
+        let dock = dockLocator.locate(
+            in: list,
+            windows: current,
+            refreshSlowSources: !reducedRate && !allScreensCovered
+        )
         let docks = dock.frames
         let docksChanged = docks != dockFrames
 
@@ -132,6 +191,9 @@ final class WindowTracker: NSObject {
         dockFrames = docks
         occluders = panels
         coveredDisplays = covered
+        if coveredChanged {
+            updateRate()
+        }
         for event in events {
             Self.logEvent(event)
         }
