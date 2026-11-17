@@ -40,6 +40,18 @@ export const CLUMP = 1;
 export const PUFF = 2;
 
 const MAX_PARTICLES = 1600;
+/** Mitten radius, px. */
+export const MITTEN_RADIUS = 24;
+/** Flakes this many mitten radii from the cursor path get knocked aside. */
+const FLAKE_PUSH_REACH = 1.6;
+/** Share of the cursor velocity a knocked flake picks up. */
+const FLAKE_PUSH_CARRY = 0.9;
+/** Outward kick away from the cursor path, px/s. */
+const FLAKE_PUSH_KICK = 140;
+/** Fastest a knocked flake can fly, px/s. */
+const FLAKE_PUSH_MAX_SPEED = 900;
+/** How quickly a knocked flake returns to its normal fall, 1/s. */
+const FLAKE_DRAG = 2.2;
 const GRAVITY = 900;
 
 /** Most snow the shovel carries, in drift units (px of height summed over cells). */
@@ -103,6 +115,8 @@ export class World {
   readonly py = new Float32Array(MAX_PARTICLES);
   readonly pvx = new Float32Array(MAX_PARTICLES);
   readonly pvy = new Float32Array(MAX_PARTICLES);
+  /** Natural fall speed of a flake, px/s; knocked flakes ease back to it. */
+  readonly pfall = new Float32Array(MAX_PARTICLES);
   readonly pr = new Float32Array(MAX_PARTICLES);
   readonly pmass = new Float32Array(MAX_PARTICLES);
   readonly pphase = new Float32Array(MAX_PARTICLES);
@@ -272,6 +286,7 @@ export class World {
     this.py[i] = y;
     this.pvx[i] = vx;
     this.pvy[i] = vy;
+    this.pfall[i] = vy;
     this.pr[i] = r;
     this.pmass[i] = mass;
     this.pphase[i] = Math.random() * Math.PI * 2;
@@ -289,6 +304,7 @@ export class World {
     this.py[i] = this.py[last]!;
     this.pvx[i] = this.pvx[last]!;
     this.pvy[i] = this.pvy[last]!;
+    this.pfall[i] = this.pfall[last]!;
     this.pr[i] = this.pr[last]!;
     this.pmass[i] = this.pmass[last]!;
     this.pphase[i] = this.pphase[last]!;
@@ -321,7 +337,7 @@ export class World {
 
   /** Mitten: brush snow away around the cursor, flicking it in the stroke direction. */
   sweep(x: number, y: number, vx: number, vy: number, dt: number): void {
-    const radius = 24;
+    const radius = MITTEN_RADIUS;
     for (const s of this.surfaces) {
       const local = x - s.x;
       if (local < -radius || local > s.w + radius) continue;
@@ -345,15 +361,62 @@ export class World {
       }
     }
 
-    // Push nearby airborne flakes along with the stroke.
+    // Push nearby clumps and powder along with the stroke; flakes are
+    // knocked aside separately by `knockFlakes`.
     const r2 = (radius * 1.8) ** 2;
     for (let i = 0; i < this.count; i++) {
+      if (this.pkind[i] === FLAKE) continue;
       const dx = this.px[i]! - x;
       const dy = this.py[i]! - y;
       if (dx * dx + dy * dy > r2) continue;
       this.pvx[i] = this.pvx[i]! + vx * 0.08;
-      if (this.pkind[i] !== FLAKE) this.pvy[i] = this.pvy[i]! + vy * 0.08;
+      this.pvy[i] = this.pvy[i]! + vy * 0.08;
     }
+  }
+
+  /**
+   * Mitten moving through the air: falling flakes near the cursor path
+   * (x0, y0) → (x1, y1) are knocked along the cursor velocity and away from
+   * the path, weaker towards the edge of the reach. Returns how many were hit.
+   */
+  knockFlakes(x0: number, y0: number, x1: number, y1: number, radius: number, vx: number, vy: number): number {
+    if (!(radius > 0) || ![x0, y0, x1, y1, vx, vy].every(Number.isFinite)) return 0;
+    const reach = radius * FLAKE_PUSH_REACH;
+    const reach2 = reach * reach;
+    const sx = x1 - x0;
+    const sy = y1 - y0;
+    const len2 = sx * sx + sy * sy;
+    const minX = Math.min(x0, x1) - reach;
+    const maxX = Math.max(x0, x1) + reach;
+    const minY = Math.min(y0, y1) - reach;
+    const maxY = Math.max(y0, y1) + reach;
+    let hit = 0;
+    for (let i = 0; i < this.count; i++) {
+      if (this.pkind[i] !== FLAKE) continue;
+      const px = this.px[i]!;
+      const py = this.py[i]!;
+      if (px < minX || px > maxX || py < minY || py > maxY) continue;
+      const t = len2 > 0 ? Math.max(0, Math.min(1, ((px - x0) * sx + (py - y0) * sy) / len2)) : 0;
+      const ox = px - (x0 + sx * t);
+      const oy = py - (y0 + sy * t);
+      const d2 = ox * ox + oy * oy;
+      if (d2 >= reach2) continue;
+      const d = Math.sqrt(d2);
+      const falloff = 1 - d / reach;
+      const nx = d > 0.01 ? ox / d : 0;
+      const ny = d > 0.01 ? oy / d : -1;
+      let fvx = this.pvx[i]! + (vx * FLAKE_PUSH_CARRY + nx * FLAKE_PUSH_KICK) * falloff;
+      let fvy = this.pvy[i]! + (vy * FLAKE_PUSH_CARRY + ny * FLAKE_PUSH_KICK) * falloff;
+      const speed = Math.hypot(fvx, fvy);
+      if (speed > FLAKE_PUSH_MAX_SPEED) {
+        fvx *= FLAKE_PUSH_MAX_SPEED / speed;
+        fvy *= FLAKE_PUSH_MAX_SPEED / speed;
+      }
+      this.pvx[i] = fvx;
+      this.pvy[i] = fvy;
+      hit++;
+    }
+    return hit;
   }
 
   /**
@@ -614,6 +677,8 @@ export class World {
         const r = this.pr[i]!;
         // Small flakes follow the wind more eagerly.
         vx += (windNow * (0.7 + 0.5 / r) - vx) * Math.min(1, dt * 1.5);
+        // Drag brings a knocked flake back to its normal fall.
+        vy += (this.pfall[i]! - vy) * Math.min(1, dt * FLAKE_DRAG);
         const phase = (this.pphase[i] = this.pphase[i]! + dt * (1.2 + r * 0.3));
         this.px[i] = ox + (vx + Math.sin(phase) * (10 + r * 4)) * dt;
         this.py[i] = oy + vy * dt;
@@ -657,6 +722,7 @@ export class World {
     this.px[i] = rand(-margin, this.width + margin);
     this.py[i] = rand(-24, -4);
     this.pvx[i] = this.wind;
+    this.pvy[i] = this.pfall[i]!;
   }
 
   /** Lands particle i on the first exposed drift it crossed this step. */

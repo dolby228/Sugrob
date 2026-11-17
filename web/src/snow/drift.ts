@@ -11,8 +11,8 @@ export const CELL = 3;
 const REPOSE_SLOPE = 0.85;
 /** Steepest slope allowed at the very ends, where the snow overhangs the edge. */
 const EDGE_SLOPE = 0.55;
-/** Absolute cap on drift height, px. */
-export const MAX_HEIGHT = 46;
+/** Absolute cap on drift height, px, kept low like the app (48 → 26 pt). */
+export const MAX_HEIGHT = 25;
 
 export interface Spill {
   /** Local x the snow fell from. */
