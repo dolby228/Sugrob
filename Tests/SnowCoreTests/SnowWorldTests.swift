@@ -22,10 +22,6 @@ final class SnowWorldTests: XCTestCase {
         return world
     }
 
-    private func meanY(_ flakes: [Flake]) -> Float {
-        flakes.reduce(Float(0)) { $0 + $1.position.y } / Float(max(1, flakes.count))
-    }
-
     func testSameSeedIsDeterministic() {
         let a = SnowWorld(bounds: screen, seed: 11)
         let b = SnowWorld(bounds: screen, seed: 11)
@@ -53,22 +49,115 @@ final class SnowWorldTests: XCTestCase {
         XCTAssertGreaterThan(world.totalSnow, later)
     }
 
-    func testRemovingSurfaceCrumblesIntoFallingFlakes() {
+    /// Another Space, ⌘H or minimize only takes the window off screen: its snow waits.
+    func testMissingSurfaceKeepsItsSnowUntilItReturns() {
         let world = snowyWorld()
-        XCTAssertGreaterThan(world.totalSnow, 0)
+        let drift = world.drifts[window.id]!
+        let before = world.totalSnow
+        XCTAssertGreaterThan(before, 0)
 
         world.setSurfaces([])
         XCTAssertNil(world.drifts[window.id])
         XCTAssertNil(world.surfaces[window.id])
         XCTAssertTrue(world.surfaceOrder.isEmpty)
         XCTAssertEqual(world.totalSnow, 0)
-        XCTAssertFalse(world.flakes.isEmpty)
-        XCTAssertTrue(world.flakes.allSatisfy { $0.isDebris })
+        XCTAssertTrue(world.flakes.isEmpty, "a missing window drops nothing")
+        XCTAssertEqual(world.dormantSurfaceIDs, [window.id])
 
-        let startY = meanY(world.flakes)
-        run(world, steps: 30)
+        run(world, steps: 600, dt: 0.1)
+        world.setSurfaces([window])
+        XCTAssertTrue(world.drifts[window.id] === drift)
+        XCTAssertEqual(world.surfaces[window.id], window)
+        XCTAssertEqual(world.totalSnow, before, accuracy: 1e-3)
+        XCTAssertTrue(world.dormantSurfaceIDs.isEmpty)
+        XCTAssertTrue(world.flakes.isEmpty)
+    }
+
+    func testDormantDriftIsNotHitByFlakes() {
+        let world = SnowWorld(bounds: screen, seed: 12, preset: .blizzard)
+        world.setSurfaces([window])
+        run(world, steps: 600)
+        world.setSurfaces([])
+        let parked = world.dormant[window.id]!.drift
+        let snow = parked.totalSnow
+        XCTAssertGreaterThan(snow, 0)
+        run(world, steps: 600)
         XCTAssertFalse(world.flakes.isEmpty)
-        XCTAssertGreaterThan(meanY(world.flakes), startY)
+        XCTAssertEqual(parked.totalSnow, snow)
+        XCTAssertEqual(world.totalSnow, 0)
+    }
+
+    /// A window skipped by a poll or two and back far away moved: the jump shakes snow off.
+    func testShortGapStillShakesOnFarJump() {
+        let world = snowyWorld()
+        let before = world.totalSnow
+        world.setSurfaces([])
+        run(world, steps: 6)
+        var moved = window
+        moved.rect.x += 300
+        world.setSurfaces([moved])
+        XCTAssertLessThan(world.totalSnow, before)
+        XCTAssertGreaterThan(world.totalSnow, 0)
+        XCTAssertFalse(world.flakes.isEmpty)
+    }
+
+    /// Back after the grace (say, from another Space): placed where it is now, no shake.
+    func testReturnAfterGraceIsPlacedWithoutShaking() {
+        let world = snowyWorld()
+        let before = world.totalSnow
+        world.setSurfaces([])
+        run(world, steps: 30, dt: 0.1)
+        var moved = window
+        moved.rect.x += 250
+        moved.rect.y -= 100
+        world.setSurfaces([moved])
+        XCTAssertEqual(world.totalSnow, before, accuracy: 1e-3)
+        XCTAssertTrue(world.flakes.isEmpty)
+        XCTAssertEqual(world.surfaces[window.id], moved)
+
+        var narrow = window
+        narrow.rect.width = 200
+        world.setSurfaces([])
+        run(world, steps: 30, dt: 0.1)
+        world.setSurfaces([narrow])
+        XCTAssertEqual(world.drifts[window.id]!.width, 200)
+        XCTAssertLessThan(world.totalSnow, before)
+        XCTAssertTrue(world.flakes.isEmpty)
+    }
+
+    func testDormantSnowIsForgottenAfterItsLifetime() {
+        let world = snowyWorld()
+        world.dormantLifetime = 5
+        let drift = world.drifts[window.id]!
+        world.setSurfaces([])
+        run(world, steps: 40, dt: 0.1)
+        XCTAssertEqual(world.dormantSurfaceIDs, [window.id])
+        run(world, steps: 20, dt: 0.1)
+        XCTAssertTrue(world.dormantSurfaceIDs.isEmpty)
+        XCTAssertTrue(world.flakes.isEmpty)
+
+        world.setSurfaces([window])
+        XCTAssertFalse(world.drifts[window.id] === drift)
+        XCTAssertEqual(world.totalSnow, 0)
+    }
+
+    func testDormantSurfacesAreCapped() {
+        let world = SnowWorld(bounds: screen, seed: 1)
+        let many = (0..<(SnowWorld.maxDormantSurfaces + 10)).map {
+            Surface(id: 100 + $0, rect: Rect(x: Float($0), y: 300, width: 50, height: 50))
+        }
+        world.setSurfaces(many)
+        world.setSurfaces([])
+        XCTAssertEqual(world.dormantSurfaceIDs.count, SnowWorld.maxDormantSurfaces)
+    }
+
+    func testClearAllForgetsDormantSnow() {
+        let world = snowyWorld()
+        world.setSurfaces([])
+        world.clearAll()
+        XCTAssertTrue(world.dormantSurfaceIDs.isEmpty)
+        world.setSurfaces([window])
+        XCTAssertEqual(world.totalSnow, 0)
     }
 
     func testMovingSurfaceKeepsDriftAttached() {

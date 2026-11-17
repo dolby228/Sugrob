@@ -53,6 +53,32 @@ public final class SnowWorld {
         let drift: Drift
     }
 
+    /// A surface missing from the latest `setSurfaces`. Its drift and the snow objects
+    /// standing on it are kept out of sight (not drawn, not hit) so they come back with it.
+    struct DormantSurface {
+        var rect: Rect
+        let drift: Drift
+        /// World `time` when the surface went missing.
+        let since: Float
+        var snowballs: [Snowball] = []
+        var snowmen: [Snowman] = []
+    }
+
+    /// Surfaces that went missing, by id (see `setSurfaces`).
+    var dormant: [Int: DormantSurface] = [:]
+
+    /// Seconds a missing surface counts as a tracker glitch: if it comes back within this
+    /// time, the move from its last rect is applied as usual (a far jump still shakes snow off).
+    public var missingGrace: Float = 2
+    /// Seconds a missing surface keeps its snow (another Space, ⌘H, minimized). After that
+    /// the snow is forgotten without debris: the window is not on screen to drop it from.
+    public var dormantLifetime: Float = 600
+    /// Most missing surfaces kept at once; the oldest is forgotten first.
+    public static let maxDormantSurfaces = 64
+
+    /// Ids of missing surfaces whose snow is kept until they return.
+    public var dormantSurfaceIDs: Set<Int> { Set(dormant.keys) }
+
     var rng: SplitMix64
     private var spawnAccumulator: Float = 0
     var entries: [Entry] = []
@@ -88,36 +114,55 @@ public final class SnowWorld {
 
     // MARK: - Surfaces
 
-    /// Replaces the surface list (front-most first). New surfaces get an empty drift,
-    /// moved ones keep theirs, removed ones crumble into falling clumps.
+    /// Replaces the surface list (front-most first). New surfaces get an empty drift and
+    /// moved ones keep theirs. Missing ones go dormant: the window may only be on another
+    /// Space, hidden, minimized or skipped by one poll, so its drift, resting snowballs and
+    /// snowmen are put aside (not drawn, not hit) and come back when the id returns within
+    /// `dormantLifetime`.
     public func setSurfaces(_ newSurfaces: [Surface]) {
         var seen = Set<Int>()
         var shaken: [Int: SIMD2<Float>] = [:]
         var newEntries: [Entry] = []
+        var woken: [DormantSurface] = []
         newEntries.reserveCapacity(newSurfaces.count)
 
         for surface in newSurfaces {
             guard seen.insert(surface.id).inserted else { continue }
             let drift: Drift
+            var previous: Rect?
             if let existing = drifts[surface.id], let old = surfaces[surface.id] {
                 drift = existing
-                if old.rect != surface.rect {
-                    surfaceChanged(id: surface.id, drift: drift, from: old.rect, to: surface.rect)
-                    let shift = SIMD2<Float>(surface.rect.x - old.rect.x, surface.rect.y - old.rect.y)
-                    if (shift.x * shift.x + shift.y * shift.y).squareRoot() > shakeThreshold {
-                        shaken[surface.id] = shift
-                    }
+                previous = old.rect
+            } else if let sleeping = dormant.removeValue(forKey: surface.id) {
+                drift = sleeping.drift
+                woken.append(sleeping)
+                if time - sleeping.since <= missingGrace {
+                    previous = sleeping.rect
+                } else if abs(surface.rect.width - sleeping.rect.width) > 0.5 {
+                    // Back after a while, maybe somewhere else: placed as it is now, no shake.
+                    drift.resize(width: surface.rect.width)
                 }
             } else {
                 drift = Drift(width: surface.rect.width, maxHeight: driftMaxHeight)
+            }
+            if let old = previous, old != surface.rect {
+                surfaceChanged(id: surface.id, drift: drift, from: old, to: surface.rect)
+                let shift = SIMD2<Float>(surface.rect.x - old.x, surface.rect.y - old.y)
+                if (shift.x * shift.x + shift.y * shift.y).squareRoot() > shakeThreshold {
+                    shaken[surface.id] = shift
+                }
             }
             newEntries.append(Entry(id: surface.id, rect: surface.rect, drift: drift))
         }
 
         var removed = Set<Int>()
         for entry in entries where !seen.contains(entry.id) {
-            crumble(entry.drift, rect: entry.rect)
             removed.insert(entry.id)
+            dormant[entry.id] = DormantSurface(rect: entry.rect, drift: entry.drift, since: time)
+        }
+        if !removed.isEmpty {
+            stashSnowObjects(on: removed)
+            trimDormant()
         }
 
         entries = newEntries
@@ -131,9 +176,29 @@ public final class SnowWorld {
         surfaces = newSurfaceMap
         surfaceOrder = newEntries.map { $0.id }
 
+        if !woken.isEmpty {
+            restoreSnowObjects(from: woken)
+        }
         if !snowballs.isEmpty || !snowmen.isEmpty {
             snowObjectsSurfacesChanged(removed: removed, shaken: shaken)
         }
+    }
+
+    /// Forgets the oldest dormant surfaces beyond `maxDormantSurfaces`.
+    private func trimDormant() {
+        while dormant.count > SnowWorld.maxDormantSurfaces {
+            guard let oldest = dormant.min(by: { $0.value.since < $1.value.since })?.key else { return }
+            dormant[oldest] = nil
+        }
+    }
+
+    /// Forgets dormant surfaces missing for longer than `dormantLifetime` (and the grace).
+    private func expireDormant() {
+        guard !dormant.isEmpty else { return }
+        let limit = max(missingGrace, dormantLifetime)
+        let now = time
+        let expired = dormant.filter { now - $0.value.since > limit }.map { $0.key }
+        for id in expired { dormant[id] = nil }
     }
 
     private func surfaceChanged(id: Int, drift: Drift, from old: Rect, to new: Rect) {
@@ -160,18 +225,13 @@ public final class SnowWorld {
         }
     }
 
-    private func crumble(_ drift: Drift, rect: Rect) {
-        let amount = drift.totalSnow
-        emitPieces(fromDrift: drift, rect: rect, amount: amount, maxPieces: 150, ignoring: nil)
-        drift.clear()
-    }
-
     // MARK: - Simulation
 
     public func step(dt: Float) {
         guard !isPaused, dt > 0, dt.isFinite else { return }
         let dt = min(dt, 0.1)
         time += dt
+        expireDormant()
         spawn(dt: dt)
         integrate(dt: dt)
         settleDrifts(dt: dt)
@@ -355,6 +415,7 @@ public final class SnowWorld {
     /// dumped clumps and the shovel load. Snowfall continues.
     public func clearAll() {
         for entry in entries { entry.drift.clear() }
+        dormant.removeAll()
         flakes.removeAll(keepingCapacity: true)
         snowballs.removeAll()
         snowmen.removeAll()
