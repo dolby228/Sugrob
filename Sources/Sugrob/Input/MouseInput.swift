@@ -13,7 +13,8 @@ private let log = Logger(subsystem: "dev.sugrob", category: "input")
 /// Working the snow must not also select text or drag the window underneath, so the
 /// overlay of the cursor's screen takes the mouse (dynamic capture) while:
 /// - the shovel is over a drift with snow, or carries a load;
-/// - ⌥ Option is held over a drift with snow;
+/// - ⌥ Option is held where a snowball can be started (enough snow, see
+///   `SnowWorld.canBeginRoll`);
 /// - a press that started captured has not been released yet.
 /// The captured overlay's `SnowView` then feeds its events into the same handler. The
 /// mitten only hovers and never captures. Capture is re-checked on every move and
@@ -366,7 +367,11 @@ final class MouseInput {
         guard !settings.isPaused else { return false }
         if isCaptureBlocked?(target.screen, target.point) ?? false { return false }
         if settings.tool == .shovel, let carrier = shovelWorld, carrier.shovelLoad > 0 { return true }
-        guard settings.tool == .shovel || optionDown else { return false }
+        // Only where `beginRoll` will actually start a ball, so the click is not eaten.
+        if optionDown, target.world.canBeginRoll(at: target.point, tolerance: Self.captureTolerance) {
+            return true
+        }
+        guard settings.tool == .shovel else { return false }
         return target.world.driftSurfaceID(
             at: target.point,
             tolerance: Self.captureTolerance,
