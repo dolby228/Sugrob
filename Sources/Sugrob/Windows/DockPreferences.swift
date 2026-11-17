@@ -16,8 +16,9 @@ import AppKit
 ///     slots * tilesize + separators * tilesize * 0.4 + 2 * tilesize * 0.3
 ///
 /// Icons are packed with almost no gap, a separator is about 0.4 tile wide and the glass
-/// adds about 0.3 tile at each end. `magnification` is ignored: the magnified state is
-/// transient. `DockLocator.centered` clamps the result to the reserved strip.
+/// adds about 0.3 tile at each end. `magnification` does not change the estimate: the
+/// magnified state is transient, and `DockLocator` freezes the frame while the cursor is
+/// in the Dock strip. `DockLocator.centered` clamps the result to the reserved strip.
 struct DockPreferences: Equatable, CustomStringConvertible {
     /// Used when `tilesize` is missing from the preferences.
     static let defaultTileSize: CGFloat = 48
@@ -34,6 +35,9 @@ struct DockPreferences: Equatable, CustomStringConvertible {
     var recentsNotRunning: Int
     var showRecents: Bool
     var autohide: Bool
+    /// Icons grow under the cursor (`magnification`), up to `largeSize` (`largesize`).
+    var magnification: Bool
+    var largeSize: CGFloat?
     var orientation: String
     /// `tilesize` was missing or invalid and `defaultTileSize` is used.
     var tileSizeIsDefault: Bool
@@ -102,7 +106,8 @@ struct DockPreferences: Equatable, CustomStringConvertible {
 
     var description: String {
         let defaultMark = tileSizeIsDefault ? " (default)" : ""
-        return "tile \(tileSize)\(defaultMark) apps \(persistentApps) others \(persistentOthers) running \(runningNotInDock) recents \(recentsNotRunning) show-recents \(showRecents) slots \(slots) separators \(separators) length \(estimatedLength) autohide \(autohide) \(orientation)"
+        let large = largeSize.map { String(describing: $0) } ?? "-"
+        return "tile \(tileSize)\(defaultMark) apps \(persistentApps) others \(persistentOthers) running \(runningNotInDock) recents \(recentsNotRunning) show-recents \(showRecents) slots \(slots) separators \(separators) length \(estimatedLength) autohide \(autohide) magnification \(magnification) large \(large) \(orientation)"
     }
 
     /// The estimate inputs and result, for «Скопировать диагностику».
@@ -119,6 +124,8 @@ struct DockPreferences: Equatable, CustomStringConvertible {
             "separators": separators,
             "estimatedLength": Double(estimatedLength),
             "autohide": autohide,
+            "magnification": magnification,
+            "largeSize": largeSize.map { Double($0) as Any } ?? NSNull(),
             "orientation": orientation,
         ]
     }
@@ -153,6 +160,8 @@ struct DockPreferences: Equatable, CustomStringConvertible {
             recentsNotRunning: extra.recents,
             showRecents: showRecents,
             autohide: defaults.bool(forKey: "autohide"),
+            magnification: defaults.bool(forKey: "magnification"),
+            largeSize: (defaults.object(forKey: "largesize") as? NSNumber).map { CGFloat($0.doubleValue) },
             orientation: defaults.string(forKey: "orientation") ?? "bottom",
             tileSizeIsDefault: !valid
         )

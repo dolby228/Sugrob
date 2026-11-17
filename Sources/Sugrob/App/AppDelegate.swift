@@ -89,7 +89,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlay.start()
         overlay.setPaused(settings.isPaused)
         applyDebugOutlines()
-        // Pause only hides the content; tracking keeps running so snow resumes in place.
+        // Pause only hides the content; tracking keeps running (slower) so snow resumes in place.
+        tracker.setReducedRate(settings.isPaused)
         tracker.start()
         pushSurfaces()
         mouse.start()
@@ -139,6 +140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch key {
         case .isPaused:
             overlay?.setPaused(settings.isPaused)
+            tracker?.setReducedRate(settings.isPaused)
             if settings.isPaused { mouse?.cancel() }
         case .showDebugOutlines:
             applyDebugOutlines()
