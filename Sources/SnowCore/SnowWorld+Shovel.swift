@@ -87,6 +87,25 @@ extension SnowWorld {
         shovelPosition = nil
     }
 
+    /// Front-most surface whose top edge (bare or snowy) is under `point`, within
+    /// `tolerance` points, and not hidden behind a window in front. This is where a
+    /// shovel load can be dumped onto a drift.
+    public func surfaceEdgeID(at point: SIMD2<Float>, tolerance: Float = 12) -> Int? {
+        guard point.x.isFinite, point.y.isFinite else { return nil }
+        for (k, entry) in entries.enumerated() {
+            let r = entry.rect
+            guard point.x >= r.x, point.x <= r.maxX else { continue }
+            let h = entry.drift.height(atX: point.x - r.x)
+            if point.y >= r.y - h - tolerance, point.y <= r.y + tolerance,
+               !isCovered(SIMD2(point.x, r.y - max(h, 1) * 0.5), byFirst: k) {
+                return entry.id
+            }
+            // A window under the cursor hides everything behind it.
+            if r.contains(point) { return nil }
+        }
+        return nil
+    }
+
     // MARK: - Simulation
 
     func stepClumps(dt: Float) {
