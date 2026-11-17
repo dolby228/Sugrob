@@ -262,10 +262,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         loginItem.state = LaunchAtLogin.isEnabled ? .on : .off
 
         let trusted = AccessibilityAccess.refresh()
+        let stale = !trusted && AccessibilityAccess.looksStale
         accessibilityItem.state = trusted ? .on : .off
-        accessibilityItem.toolTip = trusted
-            ? "Рамка Dock читается через Универсальный доступ"
-            : "Выдать Sugrob доступ к Универсальному доступу, чтобы сугроб лёг точно по Dock"
+        if trusted {
+            accessibilityItem.title = "Точный размер Dock"
+            accessibilityItem.toolTip = "Рамка Dock читается через Универсальный доступ"
+        } else if stale {
+            accessibilityItem.title = "Точный размер Dock: обновить доступ…"
+            accessibilityItem.toolTip = "Доступ выдан старой версии Sugrob: сбросить запись и запросить снова"
+        } else {
+            accessibilityItem.title = "Точный размер Dock…"
+            accessibilityItem.toolTip = "Выдать Sugrob Универсальный доступ, чтобы сугроб лёг точно по Dock"
+        }
+        accessibilityItem.isEnabled = !AccessibilityAccess.isResetting
     }
 
     // MARK: Actions
@@ -304,7 +313,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func requestAccessibility(_ sender: NSMenuItem) {
-        AccessibilityAccess.request()
+        if AccessibilityAccess.looksStale {
+            AccessibilityAccess.resetAndRequest()
+        } else {
+            AccessibilityAccess.request()
+        }
         refreshStates()
     }
 
