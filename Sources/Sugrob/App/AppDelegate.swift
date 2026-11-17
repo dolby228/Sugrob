@@ -199,9 +199,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func pushSurfaces() {
         guard let overlay, let tracker else { return }
+        let closed = Set(tracker.takeClosedWindowIDs().map { Int($0) })
         for entry in overlay.contents {
             entry.content.update(surfaces: tracker.surfaces(for: entry.screen), screen: entry.screen)
             entry.content.setCovered(tracker.isCoveredByPanel(entry.screen))
+            if !closed.isEmpty {
+                entry.content.closeWindows(closed)
+            }
         }
     }
 }

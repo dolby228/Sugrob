@@ -9,6 +9,8 @@ protocol OverlayContent: NSView {
     func setPaused(_ paused: Bool)
     /// A full-screen system panel (Launchpad / Apps, Mission Control) covers the screen.
     func setCovered(_ covered: Bool)
+    /// These windows were closed (not just moved off screen): their snow crumbles.
+    func closeWindows(_ ids: Set<Int>)
 }
 
 extension OverlayContent {
@@ -18,4 +20,6 @@ extension OverlayContent {
 
     /// The outline view keeps drawing; only the snow is hidden.
     func setCovered(_ covered: Bool) {}
+
+    func closeWindows(_ ids: Set<Int>) {}
 }

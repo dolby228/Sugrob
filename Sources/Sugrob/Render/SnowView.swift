@@ -113,6 +113,10 @@ final class SnowView: MTKView, OverlayContent {
         debugView?.update(surfaces: surfaces, screen: screen)
     }
 
+    func closeWindows(_ ids: Set<Int>) {
+        world.closeSurfaces(ids)
+    }
+
     /// Pause freezes the world, stops the draw loop and hides the view.
     func setPaused(_ paused: Bool) {
         isSnowPaused = paused
