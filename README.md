@@ -23,7 +23,7 @@ Requirements: macOS 13 or newer, Apple Silicon or Intel.
 | Pause / resume | Menu bar → **Пауза**, or ⌃⌥⌘S |
 | Snowfall | **Снегопад**: Лёгкий, Ровный, Метель |
 | Wind | **Ветер**: calm or one of four directions |
-| Mitten | **Инструмент → Варежка**, then move the cursor through a drift to sweep it |
+| Mitten | **Инструмент → Варежка**, then move the cursor through a drift to sweep it, or swipe through falling snow to knock flakes aside |
 | Shovel | **Инструмент → Лопата**, drag along a drift to scoop, release to throw the load as one clump |
 | Snowball | Hold ⌥ and drag along a drift, release to throw. Three stacked balls become a snowman |
 | Clear everything | **Очистить сугробы**, or ⌃⌥⌘K |
@@ -57,7 +57,7 @@ npm install
 npm run dev
 ```
 
-Pushing a `v*` tag publishes a GitHub release with `Sugrob.zip`.
+Pushing a `v*` tag publishes a GitHub release with `Sugrob.zip`; the release notes are the matching section of [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Project layout
 
