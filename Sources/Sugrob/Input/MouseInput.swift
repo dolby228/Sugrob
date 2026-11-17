@@ -35,6 +35,8 @@ final class MouseInput {
 
     /// Mitten radius at moderate speed, in points.
     static let mittenRadius: Float = 18
+    /// Below this cursor speed (pt/s) the mitten does not knock flakes out of the air.
+    static let flakeSwatMinSpeed: Float = 40
     /// Most snow a single drag sample may shave off, in points of height.
     static let maxScoopDepth: Float = 8
     /// Depth of the bladeful scooped on press.
@@ -521,9 +523,17 @@ final class MouseInput {
     private func sweepAlongPath(to target: Target) {
         let speed = (velocity.x * velocity.x + velocity.y * velocity.y).squareRoot()
         let radius = Self.mittenRadius * max(0.8, min(1.6, 0.8 + speed / 1200))
-        for point in pathSamples(to: target, spacing: radius * 0.6) {
+        let samples = pathSamples(to: target, spacing: radius * 0.6)
+        for point in samples {
             target.world.sweep(at: point, radius: radius, direction: velocity)
         }
+        // Flakes in the air are knocked aside too, but only by a moving mitten.
+        guard speed > Self.flakeSwatMinSpeed else { return }
+        var from = target.point
+        if let last = lastPoint, lastWorld === target.world, !isJump(to: target) {
+            from = last
+        }
+        target.world.pushFlakes(from: from, to: target.point, radius: radius, velocity: velocity)
     }
 
     private func scoopAlongPath(to target: Target) {
