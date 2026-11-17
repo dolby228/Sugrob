@@ -86,10 +86,13 @@ final class Settings {
         set { store(newValue, for: .showInDock) }
     }
 
-    /// Sets both wind components with a single change notification per component.
+    /// Writes both wind components, then notifies once (as `.windX`), so observers never
+    /// see a preset with only one component applied. Every observer handles `.windX` and
+    /// `.windY` the same way: it rereads both.
     func setWind(x: Double, y: Double) {
-        windX = x
-        windY = y
+        defaults.set(x, forKey: Key.windX.rawValue)
+        defaults.set(y, forKey: Key.windY.rawValue)
+        notify(.windX)
     }
 
     /// `handler` runs on the main actor after each change, with the key that changed.
@@ -99,6 +102,10 @@ final class Settings {
 
     private func store(_ value: Any, for key: Key) {
         defaults.set(value, forKey: key.rawValue)
+        notify(key)
+    }
+
+    private func notify(_ key: Key) {
         for observer in observers {
             observer(key)
         }
