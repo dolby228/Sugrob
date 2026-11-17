@@ -24,7 +24,8 @@ private let log = Logger(subsystem: "dev.sugrob", category: "input")
 /// A load carried away from any window edge for `loadDropDelay` falls off as a clump.
 ///
 /// - Варежка (mitten): moving the cursor with no button pressed sweeps snow off drifts,
-///   kicking it in the direction of movement.
+///   kicking it in the direction of movement. A swipe there and back across a snowman
+///   knocks it over.
 /// - Лопата (shovel): pressing on a drift scoops a bladeful; dragging keeps scooping along
 ///   the path; letting go after a drag throws the whole load as one clump. After a plain
 ///   click the load stays on the shovel and the next press dumps it.
@@ -534,6 +535,8 @@ final class MouseInput {
             from = last
         }
         target.world.pushFlakes(from: from, to: target.point, radius: radius, velocity: velocity)
+        let fell = target.world.knockSnowmen(from: from, to: target.point, radius: radius, velocity: velocity)
+        if fell > 0 { log.debug("mitten knocked over \(fell) snowman(s)") }
     }
 
     private func scoopAlongPath(to target: Target) {

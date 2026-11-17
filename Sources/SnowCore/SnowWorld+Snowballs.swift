@@ -6,7 +6,7 @@ import Foundation
 /// snow (its area is taken from the drift, so snow is conserved), and after `releaseBall`
 /// it falls until it lands on a drift or on the top ball of a stack. Three stacked balls
 /// turn into a `Snowman`. Resting balls and snowmen ride along with their surface; a hard
-/// shake knocks them off, a missing surface keeps them aside until it returns, and a ball
+/// shake or a mitten swipe there and back (`knockSnowmen`) knocks them off, a missing surface keeps them aside until it returns, and a ball
 /// that reaches the bottom of the bounds bursts into debris flakes.
 extension SnowWorld {
     public static let minSnowballRadius: Float = 4
@@ -18,6 +18,10 @@ extension SnowWorld {
     public static let maxSnowballs = 24
     /// Oldest snowmen crumble when more than this many stand.
     public static let maxSnowmen = 8
+    /// Least mitten speed (pt/s) that counts as a hit on a snowman.
+    public static let snowmanKnockMinSpeed: Float = 150
+    /// Seconds a hit is remembered while waiting for the swipe back.
+    public static let snowmanKnockWindow: Float = 1.5
 
     static let snowballGravity: Float = 1100
     static let snowballMaxFallSpeed: Float = 900
@@ -142,6 +146,51 @@ extension SnowWorld {
         snowballs[i].surfaceID = nil
         snowballs[i].ignoredSurfaceID = nil
         return true
+    }
+
+    /// Mitten moving with `velocity` (pt/s) from `from` to `to`: a snowman it brushes
+    /// faster than `snowmanKnockMinSpeed` takes a hit. A hit the opposite way within
+    /// `snowmanKnockWindow` of the last one (a swipe there and back) knocks it over; the
+    /// balls fly off along the cursor and burst at the bottom. One pass alone never does,
+    /// so the cursor crossing a snowman on the way to a button leaves it standing. Snowmen
+    /// hidden behind a window in front are not hit. Returns how many fell.
+    @discardableResult
+    public func knockSnowmen(from: SIMD2<Float>, to: SIMD2<Float>, radius: Float, velocity: SIMD2<Float>) -> Int {
+        guard !snowmen.isEmpty, radius > 0, radius.isFinite,
+              from.x.isFinite, from.y.isFinite, to.x.isFinite, to.y.isFinite,
+              velocity.x.isFinite, velocity.y.isFinite else { return 0 }
+        let speed = (velocity.x * velocity.x + velocity.y * velocity.y).squareRoot()
+        guard speed >= SnowWorld.snowmanKnockMinSpeed, abs(velocity.x) > 1 else { return 0 }
+        let direction: Float = velocity.x > 0 ? 1 : -1
+        snowmanHits = snowmanHits.filter { time - $0.value.time <= SnowWorld.snowmanKnockWindow }
+        let segment = to - from
+        let length2 = (segment * segment).sum()
+        var fell = 0
+        var k = snowmen.count - 1
+        while k >= 0 {
+            let man = snowmen[k]
+            let front = entryIndex(man.surfaceID) ?? 0
+            let touched = zip(man.centers, man.radii).contains { center, r in
+                let t: Float = length2 > 0 ? max(0, min(1, ((center - from) * segment).sum() / length2)) : 0
+                let offset = center - (from + segment * t)
+                let reach = r + radius
+                return (offset * offset).sum() < reach * reach && !isCovered(center, byFirst: front)
+            }
+            if touched {
+                if let last = snowmanHits[man.id], last.direction != direction {
+                    snowmanHits[man.id] = nil
+                    var v = velocity * 0.5
+                    let s = speed * 0.5
+                    if s > SnowWorld.snowballMaxReleaseSpeed { v *= SnowWorld.snowballMaxReleaseSpeed / s }
+                    topple(snowmanAt: k, velocity: SIMD2(v.x, min(v.y, 0) - 120), ignoring: man.surfaceID)
+                    fell += 1
+                } else {
+                    snowmanHits[man.id] = (time, direction)
+                }
+            }
+            k -= 1
+        }
+        return fell
     }
 
     /// Front-most surface whose snow bank is under `point` (within `tolerance` points of it)
