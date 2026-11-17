@@ -64,6 +64,15 @@ extension SnowWorld {
         return ball.id
     }
 
+    /// True if `beginRoll` at `point` would start a ball: a resting ball to pick up, or
+    /// enough snow within `tolerance` points and room for one more ball.
+    public func canBeginRoll(at point: SIMD2<Float>, tolerance: Float = 26) -> Bool {
+        guard !isPaused, point.x.isFinite, point.y.isFinite else { return false }
+        if pickableBallIndex(near: point) != nil { return true }
+        guard driftSurfaceID(at: point, tolerance: tolerance, minHeight: SnowWorld.minSnowToRoll) != nil else { return false }
+        return snowballs.count < SnowWorld.maxSnowballs || oldestLooseBallIndex() != nil
+    }
+
     /// Moves a rolling/held ball to the cursor. On a drift it rolls along the snow surface
     /// and grows with what it picks up; elsewhere it follows the cursor through the air.
     /// Returns false if the ball no longer exists or is not held (e.g. after `clearAll`).
