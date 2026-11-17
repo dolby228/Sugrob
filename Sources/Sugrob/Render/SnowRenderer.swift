@@ -265,8 +265,21 @@ final class SnowRenderer {
 
     private var displayHeights: [Float] = []
     private var smoothingKernel: [Float] = []
-    /// Subdivided bank outline: local x, height and slope (dh/dx) per point.
-    private var driftCurve: [SIMD3<Float>] = []
+
+    /// Subdivided bank outline of one drift: local x, height and slope (dh/dx) per point.
+    /// Rebuilt only when the drift's `revision` changes; most frames reuse it.
+    private struct CachedCurve {
+        let drift: Drift
+        var revision: UInt64
+        var seed: Float
+        var points: [SIMD3<Float>]
+        var lastUsedFrame: Int
+    }
+
+    private var curveCache: [Int: CachedCurve] = [:]
+    /// Frames drawn so far; ages out cached curves of surfaces that went away.
+    private var frameCounter = 0
+    private static let curveCacheLifetime = 120
     private var occluderDraws: [DrawRange] = []
     private var driftDraws: [DrawRange] = []
     private var shapeDraws: [DrawRange] = []
@@ -595,6 +608,11 @@ final class SnowRenderer {
     private func fillDrifts(_ world: SnowWorld) -> MTLBuffer? {
         occluderDraws.removeAll(keepingCapacity: true)
         driftDraws.removeAll(keepingCapacity: true)
+        frameCounter &+= 1
+        if frameCounter % Self.curveCacheLifetime == 0, !curveCache.isEmpty {
+            let now = frameCounter
+            curveCache = curveCache.filter { now &- $0.value.lastUsedFrame < Self.curveCacheLifetime }
+        }
 
         let order = world.surfaceOrder
         let limit = min(order.count, Self.maxOrderedSurfaces)
@@ -644,7 +662,7 @@ final class SnowRenderer {
             let id = order[k]
             guard let drift = world.drifts[id], !drift.isEmpty, let rect = world.surfaces[id]?.rect else { continue }
             let start = cursor
-            cursor = writeDrift(drift, rect: rect, seed: Float(abs(id) % 97), to: out, from: cursor)
+            cursor = writeDrift(drift, id: id, rect: rect, seed: Float(abs(id) % 97), to: out, from: cursor)
             if cursor > start {
                 driftDraws.append(DrawRange(start: start, count: cursor - start, reference: Self.surfaceReference(k)))
             }
@@ -740,8 +758,32 @@ final class SnowRenderer {
         return Float(v & 0xFFFF) / 32767.5 - 1
     }
 
+    /// The cached outline of `drift` (surface `id`), rebuilt if the heights changed.
+    private func cachedCurve(for drift: Drift, id: Int, seed: Float) -> [SIMD3<Float>] {
+        if let cached = curveCache[id], cached.drift === drift,
+           cached.revision == drift.revision, cached.seed == seed {
+            curveCache[id]?.lastUsedFrame = frameCounter
+            return cached.points
+        }
+        // Reuse the old array's storage when the surface keeps its drift.
+        var points: [SIMD3<Float>] = []
+        if let old = curveCache.removeValue(forKey: id), old.drift === drift {
+            points = old.points
+        }
+        fillDisplayHeights(drift, seed: seed)
+        fillDriftCurve(drift, into: &points)
+        curveCache[id] = CachedCurve(
+            drift: drift,
+            revision: drift.revision,
+            seed: seed,
+            points: points,
+            lastUsedFrame: frameCounter
+        )
+        return points
+    }
+
     /// Catmull-Rom through the display heights, `driftSubdivisions` points per column gap.
-    private func fillDriftCurve(_ drift: Drift) {
+    private func fillDriftCurve(_ drift: Drift, into driftCurve: inout [SIMD3<Float>]) {
         let n = drift.columnCount
         let steps = Self.driftSubdivisions
         let spacing = drift.columnSpacing
@@ -775,14 +817,14 @@ final class SnowRenderer {
 
     private func writeDrift(
         _ drift: Drift,
+        id: Int,
         rect: Rect,
         seed: Float,
         to out: UnsafeMutablePointer<DriftVertex>,
         from start: Int
     ) -> Int {
         guard drift.columnCount >= 2 else { return start }
-        fillDisplayHeights(drift, seed: seed)
-        fillDriftCurve(drift)
+        let driftCurve = cachedCurve(for: drift, id: id, seed: seed)
 
         var cursor = start
         let surfaceTop = rect.y
