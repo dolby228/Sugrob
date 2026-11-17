@@ -273,6 +273,10 @@ final class MouseInput {
     }
 
     private func mouseDown(_ target: Target, option: Bool) {
+        // The release of a ball still held may have been lost; never leave it frozen.
+        if case .snowball(let world, _, let id) = drag {
+            world.releaseBall(id, velocity: .zero)
+        }
         drag = .idle
         if option {
             if let id = target.world.beginRoll(at: target.point) {
