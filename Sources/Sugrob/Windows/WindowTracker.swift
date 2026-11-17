@@ -251,6 +251,11 @@ final class WindowTracker: NSObject {
     /// How the Dock was located (source per screen, AX state and frames, estimate inputs).
     var dockDiagnostics: [String: Any] { dockLocator.diagnostics }
 
+    /// Makes the next poll re-read Accessibility, the Dock preferences and the Dock pid.
+    func invalidateDockSources() {
+        dockLocator.invalidateSlowSources()
+    }
+
     /// Synthetic negative id of the Dock surface on a screen; stable across polls.
     static func dockSurfaceID(for screen: NSScreen) -> Int {
         -(Int(screen.displayID ?? 0) + 1)

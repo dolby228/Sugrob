@@ -40,13 +40,22 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let copiedLabel = NSTextField(labelWithString: "")
     private let accessibilityStatus = NSTextField(wrappingLabelWithString: "")
     private let accessibilityButton = NSButton(title: "Разрешить…", target: nil, action: nil)
+    private let accessibilityResetButton = NSButton(title: "Сбросить запись", target: nil, action: nil)
     private let accessibilityHint = NSTextField(wrappingLabelWithString: "")
+    private lazy var accessibilityButtons = NSStackView(views: [accessibilityButton, accessibilityResetButton])
     /// Re-checks the Accessibility state while the window is open.
     private var accessibilityTimer: Timer?
+    /// Ends the highlight set by `highlightAccessibility()`.
+    private var highlightEnd: DispatchWorkItem?
+    private var isHighlighted = false
+    private var lastAccessibilityLayout: String?
 
     static let accessibilityHintText =
-        "Без доступа ширина Dock оценивается приблизительно. После обновления Sugrob доступ нужно выдать заново: удалите старую запись Sugrob из списка и добавьте снова."
+        "Нужен только чтобы узнать точный размер Dock. Без доступа ширина оценивается."
+    static let accessibilityManualResetText =
+        "Сбросить запись автоматически не получилось. В Системных настройках → Конфиденциальность и безопасность → Универсальный доступ удалите Sugrob кнопкой «−» и добавьте снова кнопкой «+»."
     static let accessibilityPollInterval: TimeInterval = 2
+    static let highlightDuration: TimeInterval = 6
 
     private static let toolHints: [Settings.Tool: String] = [
         .mitten: "Варежка: ведите курсором по сугробу, снег смахивается по ходу движения.",
@@ -91,7 +100,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     /// Shows the window in front of other apps. `message` is an optional hint line on top.
-    func show(message: String? = nil) {
+    /// With `activate` false Sugrob is not activated and the window does not take focus:
+    /// for windows that open on their own, not because the user asked.
+    func show(message: String? = nil, activate: Bool = true) {
         guard let window else { return }
         if let message {
             messageLabel.stringValue = message
@@ -103,16 +114,35 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         if !window.isVisible {
             window.center()
         }
-        if #available(macOS 14.0, *) {
-            NSApp.activate()
-        } else {
-            NSApp.activate(ignoringOtherApps: true)
+        if activate {
+            if #available(macOS 14.0, *) {
+                NSApp.activate()
+            } else {
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            window.makeKeyAndOrderFront(nil)
         }
-        window.makeKeyAndOrderFront(nil)
         // An accessory app may be refused activation; the window must still come up.
         window.orderFrontRegardless()
         startAccessibilityPolling()
         log.debug("settings window shown")
+    }
+
+    /// Draws attention to the Accessibility row for a few seconds: accent-colored status
+    /// and «Разрешить…» as the default button. Does not show the window.
+    func highlightAccessibility() {
+        highlightEnd?.cancel()
+        isHighlighted = true
+        refreshAccessibility()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                self?.isHighlighted = false
+                self?.refreshAccessibility()
+            }
+        }
+        highlightEnd = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.highlightDuration, execute: work)
+        log.debug("accessibility row highlighted")
     }
 
     var isShowingMessage: Bool {
@@ -149,6 +179,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         dockCheckbox.action = #selector(dockChanged(_:))
         accessibilityButton.target = self
         accessibilityButton.action = #selector(requestAccessibility(_:))
+        accessibilityResetButton.target = self
+        accessibilityResetButton.action = #selector(resetAccessibility(_:))
+        accessibilityResetButton.controlSize = .small
+        accessibilityResetButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        accessibilityResetButton.toolTip =
+            "Удалить запись Sugrob из списка Универсального доступа и запросить доступ заново"
+        accessibilityButtons.orientation = .horizontal
+        accessibilityButtons.alignment = .centerY
+        accessibilityButtons.spacing = 8
         accessibilityStatus.preferredMaxLayoutWidth = 300
         accessibilityHint.stringValue = Self.accessibilityHintText
         accessibilityHint.textColor = .secondaryLabelColor
@@ -175,9 +214,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             [label("Прочее:"), debugCheckbox],
             [NSGridCell.emptyContentView, loginCheckbox],
             [NSGridCell.emptyContentView, dockCheckbox],
-            [NSGridCell.emptyContentView, accessibilityStatus],
-            [NSGridCell.emptyContentView, accessibilityButton],
-            [NSGridCell.emptyContentView, accessibilityHint],
+            [NSGridCell.emptyContentView, accessibilitySection()],
         ])
         grid.rowSpacing = 10
         grid.columnSpacing = 8
@@ -245,6 +282,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.setContentSize(content.fittingSize)
     }
 
+    /// Status, buttons and hint in one stack, so hidden parts take no space.
+    private func accessibilitySection() -> NSStackView {
+        let stack = NSStackView(views: [accessibilityStatus, accessibilityButtons, accessibilityHint])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+        return stack
+    }
+
     private func label(_ text: String) -> NSTextField {
         NSTextField(labelWithString: text)
     }
@@ -285,9 +331,44 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     private func refreshAccessibility() {
         let trusted = AccessibilityAccess.refresh()
-        let state = trusted ? "включено" : "нужен доступ к Универсальному доступу"
+        let stale = !trusted && AccessibilityAccess.looksStale
+        let resetting = AccessibilityAccess.isResetting
+        let state: String
+        if trusted {
+            state = "включено"
+        } else if stale {
+            state = "доступ выдан старой версии Sugrob"
+        } else {
+            state = "нужен Универсальный доступ"
+        }
         accessibilityStatus.stringValue = "Точный размер Dock: " + state
-        accessibilityButton.isEnabled = !trusted
+        accessibilityStatus.textColor = isHighlighted && !trusted ? .controlAccentColor : .labelColor
+        accessibilityStatus.font = isHighlighted && !trusted
+            ? .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+            : .systemFont(ofSize: NSFont.systemFontSize)
+
+        accessibilityButtons.isHidden = trusted
+        accessibilityButton.title = stale ? "Сбросить и запросить снова" : "Разрешить…"
+        accessibilityButton.isEnabled = !resetting
+        accessibilityButton.keyEquivalent = isHighlighted && !trusted ? "\r" : ""
+        // The primary button already resets for a stale grant.
+        accessibilityResetButton.isHidden = stale
+        accessibilityResetButton.isEnabled = !resetting
+
+        var hint = Self.accessibilityHintText
+        if AccessibilityAccess.resetFailed {
+            hint += "\n" + Self.accessibilityManualResetText
+        }
+        accessibilityHint.stringValue = hint
+        accessibilityHint.isHidden = trusted
+
+        // Refit only when the row changed shape, not on every 2 s re-check.
+        let layoutKey = "\(trusted) \(stale) \(hint)"
+        let changed = layoutKey != lastAccessibilityLayout
+        lastAccessibilityLayout = layoutKey
+        if changed, window?.isVisible == true {
+            fitWindow()
+        }
     }
 
     private func startAccessibilityPolling() {
@@ -354,7 +435,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func requestAccessibility(_ sender: NSButton) {
-        AccessibilityAccess.request()
+        if AccessibilityAccess.looksStale {
+            AccessibilityAccess.resetAndRequest()
+        } else {
+            AccessibilityAccess.request()
+        }
+        refreshAccessibility()
+    }
+
+    @objc private func resetAccessibility(_ sender: NSButton) {
+        AccessibilityAccess.resetAndRequest()
         refreshAccessibility()
     }
 
