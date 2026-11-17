@@ -12,15 +12,16 @@ private let log = Logger(subsystem: "dev.sugrob", category: "input")
 ///
 /// Working the snow must not also select text or drag the window underneath, so the
 /// overlay of the cursor's screen takes the mouse (dynamic capture) while:
-/// - the shovel is over a drift with snow, or carries a load;
+/// - the shovel is over a drift with snow, or carries a load over a window's top edge;
 /// - ⌥ Option is held where a snowball can be started (enough snow, see
 ///   `SnowWorld.canBeginRoll`);
 /// - a press that started captured has not been released yet.
 /// The captured overlay's `SnowView` then feeds its events into the same handler. The
 /// mitten only hovers and never captures. Capture is re-checked on every move and
 /// modifier change, and by a watchdog timer while it is on. Without Accessibility the
-/// global monitor gets no `flagsChanged`, so while the cursor is over snow and nothing
-/// is captured, a hover timer polls the modifiers.
+/// global monitor gets no `flagsChanged`, so while the cursor is over snow (or the
+/// shovel carries a load) and nothing is captured, a hover timer polls the modifiers.
+/// A load carried away from any window edge for `loadDropDelay` falls off as a clump.
 ///
 /// - Варежка (mitten): moving the cursor with no button pressed sweeps snow off drifts,
 ///   kicking it in the direction of movement.
@@ -49,6 +50,8 @@ final class MouseInput {
     static let maxPathGap: TimeInterval = 0.2
     /// How often modifiers are polled while the cursor hovers over snow uncaptured.
     static let hoverInterval: TimeInterval = 0.1
+    /// A shovel load carried away from snow this long falls off on its own.
+    static let loadDropDelay: TimeInterval = 4
 
     /// Asks the overlay of `screen` to take the mouse; nil gives it back everywhere.
     var onCaptureChange: (@MainActor (_ screen: NSScreen?) -> Void)?
@@ -138,6 +141,8 @@ final class MouseInput {
     private var hoverTimer: Timer?
     /// Seconds between the previous pointer event and the current one.
     private var eventGap: TimeInterval = .infinity
+    /// When the carried shovel load left the last window edge.
+    private var loadAwaySince: TimeInterval?
 
     init(settings: Settings, worlds: @escaping WorldProvider) {
         self.settings = settings
@@ -358,6 +363,7 @@ final class MouseInput {
             return
         }
         defer { updateHoverPoll(at: target) }
+        dropLoadIfAway(at: target)
         // A button held down for another app (dragging a window over a drift).
         if NSEvent.pressedMouseButtons & 1 != 0 {
             setCapture(nil)
@@ -370,10 +376,19 @@ final class MouseInput {
         setCapture(target.screen)
     }
 
+    private var carriesLoad: Bool {
+        guard settings.tool == .shovel, let carrier = shovelWorld else { return false }
+        return carrier.shovelLoad > 0
+    }
+
     private func wantsCapture(_ target: Target) -> Bool {
         guard !settings.isPaused else { return false }
         if isCaptureBlocked?(target.screen, target.point) ?? false { return false }
-        if settings.tool == .shovel, let carrier = shovelWorld, carrier.shovelLoad > 0 { return true }
+        // A load is dumped with a click on a window edge; elsewhere clicks stay ordinary
+        // (the press still dumps the load, but the app under the cursor gets it too).
+        if carriesLoad, target.world.surfaceEdgeID(at: target.point, tolerance: Self.captureTolerance) != nil {
+            return true
+        }
         // Only where `beginRoll` will actually start a ball, so the click is not eaten.
         if optionDown, target.world.canBeginRoll(at: target.point, tolerance: Self.captureTolerance) {
             return true
@@ -441,13 +456,14 @@ final class MouseInput {
         updateCapture(at: locate(location))
     }
 
-    /// Polls the modifiers while the cursor is over snow and nothing is captured:
-    /// `flagsChanged` does not reach the global monitor without Accessibility, so
-    /// pressing ⌥ over a still cursor would otherwise do nothing.
+    /// Polls the modifiers while the cursor is over snow (or the shovel carries a load) and
+    /// nothing is captured: `flagsChanged` does not reach the global monitor without
+    /// Accessibility, so pressing ⌥ over a still cursor would otherwise do nothing.
     private func updateHoverPoll(at target: Target?) {
         var wanted = false
         if captureDisplay == nil, !settings.isPaused, let target {
-            wanted = target.world.canBeginRoll(at: target.point, tolerance: Self.captureTolerance)
+            wanted = carriesLoad
+                || target.world.canBeginRoll(at: target.point, tolerance: Self.captureTolerance)
         }
         if wanted { startHoverPoll() } else { stopHoverPoll() }
     }
@@ -476,6 +492,28 @@ final class MouseInput {
         }
         optionDown = NSEvent.modifierFlags.contains(.option)
         updateCapture(at: locate(NSEvent.mouseLocation))
+    }
+
+    /// A load carried away from every window edge for `loadDropDelay` falls off the
+    /// shovel as one clump, so it does not hang on the cursor forever.
+    private func dropLoadIfAway(at target: Target?) {
+        guard carriesLoad else {
+            loadAwaySince = nil
+            return
+        }
+        if let target, target.world.surfaceEdgeID(at: target.point, tolerance: Self.captureTolerance) != nil {
+            loadAwaySince = nil
+            return
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard let since = loadAwaySince else {
+            loadAwaySince = now
+            return
+        }
+        guard now - since >= Self.loadDropDelay else { return }
+        log.debug("shovel load carried away from snow, dropping it")
+        loadAwaySince = nil
+        dumpCarriedLoad()
     }
 
     // MARK: Tools
