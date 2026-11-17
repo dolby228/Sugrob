@@ -119,8 +119,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onboarding.schedule()
     }
 
-    /// Access granted: switch the Dock to its exact frame right away and say so, if the
-    /// user asked for it during this launch.
+    /// Access granted: start the AX walk for the exact Dock frame on the next poll (it runs
+    /// in the background; on pause it waits until the snow resumes) and say so, if the user
+    /// asked for it during this launch.
     private func accessibilityChanged(trusted: Bool?) {
         guard trusted == true else { return }
         tracker?.invalidateDockSources()
