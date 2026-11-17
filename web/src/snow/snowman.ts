@@ -28,7 +28,8 @@ export interface Stack {
 
 export const SNOWMAN_BALLS = 3;
 const MIN_R = 4;
-const MAX_R = 26;
+/** Max ball radius, scaled like the app (28 → 16 pt). */
+const MAX_R = 15;
 const GRAVITY = 1100;
 const MAX_STACKS = 8;
 /** How much of the snowball sinks into the drift it rests on. */
