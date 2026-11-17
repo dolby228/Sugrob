@@ -16,6 +16,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     var dockDiagnostics: (() -> [String: Any])?
 
     private var reportedHidden = false
+    /// Checks in a row that found the status item hidden.
+    private var hiddenStreak = 0
+    /// The item must look hidden this many checks in a row, `recheckInterval` apart,
+    /// before the settings window is opened in its place.
+    static let hiddenChecksRequired = 3
+    static let recheckInterval: TimeInterval = 2
+    /// The popover of `showTransientMessage`.
+    private var transientPopover: NSPopover?
     private var visibilityCheck: DispatchWorkItem?
 
     private let settings: Settings
@@ -61,6 +69,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil
         )
+        // Leaving a full-screen Space: a check skipped there can run now.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(activeSpaceChanged(_:)),
+            name: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil
+        )
     }
 
     // MARK: Visibility
@@ -82,26 +97,52 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         scheduleVisibilityCheck()
     }
 
+    @objc private func activeSpaceChanged(_ notification: Notification) {
+        guard !reportedHidden else { return }
+        scheduleVisibilityCheck()
+    }
+
     private func checkVisibility() {
+        visibilityCheck = nil
+        if let reason = unjudgeableReason() {
+            hiddenStreak = 0
+            log.debug("status item check skipped: \(reason, privacy: .public)")
+            return
+        }
         guard let reason = hiddenReason() else {
+            hiddenStreak = 0
             log.debug("status item visible")
             return
         }
-        log.notice("status item hidden: \(reason, privacy: .public)")
+        hiddenStreak += 1
+        log.notice("status item hidden (\(self.hiddenStreak)/\(Self.hiddenChecksRequired)): \(reason, privacy: .public)")
+        guard hiddenStreak >= Self.hiddenChecksRequired else {
+            scheduleVisibilityCheck(after: Self.recheckInterval)
+            return
+        }
         guard !reportedHidden else { return }
         reportedHidden = true
         onStatusItemHidden?(reason)
+    }
+
+    /// Non-nil when visibility cannot be judged right now: the menu bar is hidden
+    /// (auto-hide, a full-screen Space) or the item's window is on no screen (a sleeping
+    /// or disconnected display). Occlusion alone is no proof either: a hidden menu bar
+    /// and a sleeping display occlude the item too.
+    private func unjudgeableReason() -> String? {
+        if !NSMenu.menuBarVisible() { return "menu bar is hidden" }
+        if let window = statusItem.button?.window, window.screen == nil {
+            return "button window has no screen"
+        }
+        return nil
     }
 
     /// Nil when the status item looks visible, otherwise why it is not.
     func hiddenReason() -> String? {
         guard statusItem.isVisible else { return "isVisible is false" }
         guard let window = statusItem.button?.window else { return "no button window" }
-        if !window.occlusionState.contains(.visible) {
-            return "button window is occluded"
-        }
         let frame = window.frame
-        guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(frame) }) else {
+        guard let screen = window.screen ?? NSScreen.screens.first(where: { $0.frame.intersects(frame) }) else {
             return "button window \(frame) is off every screen"
         }
         guard screen.safeAreaInsets.top > 0,
@@ -123,6 +164,50 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return "button window \(frame) is left of the notch \(notch)"
         }
         return nil
+    }
+
+    /// A short message in a popover under the status item that closes by itself. Only
+    /// logged when the status item cannot be seen.
+    func showTransientMessage(_ text: String, duration: TimeInterval = 3) {
+        guard NSMenu.menuBarVisible(), hiddenReason() == nil,
+              let button = statusItem.button, button.window?.screen != nil
+        else {
+            log.info("message without a visible status item: \(text, privacy: .public)")
+            return
+        }
+        transientPopover?.close()
+
+        let label = NSTextField(labelWithString: text)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        let view = NSView()
+        view.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
+            label.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
+            label.topAnchor.constraint(equalTo: view.topAnchor, constant: 10),
+            label.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -10),
+        ])
+        view.layoutSubtreeIfNeeded()
+        let controller = NSViewController()
+        controller.view = view
+
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.animates = true
+        popover.contentViewController = controller
+        popover.contentSize = view.fittingSize
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        transientPopover = popover
+        log.info("message: \(text, privacy: .public)")
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self, weak popover] in
+            MainActor.assumeIsolated {
+                popover?.close()
+                if let self, self.transientPopover === popover {
+                    self.transientPopover = nil
+                }
+            }
+        }
     }
 
     /// `auxiliaryTop*Area` should be in global coordinates; tolerate screen-local rects.
@@ -263,10 +348,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         loginItem.toolTip = LaunchAtLogin.hint
 
         let trusted = AccessibilityAccess.refresh()
+        let stale = !trusted && AccessibilityAccess.looksStale
         accessibilityItem.state = trusted ? .on : .off
-        accessibilityItem.toolTip = trusted
-            ? "Рамка Dock читается через Универсальный доступ"
-            : "Выдать Sugrob доступ к Универсальному доступу, чтобы сугроб лёг точно по Dock"
+        if trusted {
+            accessibilityItem.title = "Точный размер Dock"
+            accessibilityItem.toolTip = "Рамка Dock читается через Универсальный доступ"
+        } else if stale {
+            accessibilityItem.title = "Точный размер Dock: обновить доступ…"
+            accessibilityItem.toolTip = "Доступ выдан старой версии Sugrob: сбросить запись и запросить снова"
+        } else {
+            accessibilityItem.title = "Точный размер Dock…"
+            accessibilityItem.toolTip = "Выдать Sugrob Универсальный доступ, чтобы сугроб лёг точно по Dock"
+        }
+        accessibilityItem.isEnabled = !AccessibilityAccess.isResetting
     }
 
     // MARK: Actions
@@ -305,7 +399,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func requestAccessibility(_ sender: NSMenuItem) {
-        AccessibilityAccess.request()
+        if AccessibilityAccess.looksStale {
+            AccessibilityAccess.resetAndRequest()
+        } else {
+            AccessibilityAccess.request()
+        }
         refreshStates()
     }
 
@@ -330,6 +428,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             "hasButtonWindow": window != nil,
             "windowFrame": Diagnostics.rect(window?.frame),
             "occlusionVisible": window.map { $0.occlusionState.contains(.visible) } ?? false,
+            "menuBarVisible": NSMenu.menuBarVisible(),
             "screen": window?.screen?.localizedName ?? "",
             "hiddenReason": (hiddenReason() as Any?) ?? NSNull(),
         ]

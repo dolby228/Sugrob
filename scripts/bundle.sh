@@ -53,6 +53,27 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 
 # Ad-hoc signature so Gatekeeper lets the user open it via right click -> Open.
-codesign --force --deep --sign - "$APP"
+#
+# An ad-hoc signature has no certificate, so its implicit designated requirement is the
+# cdhash and macOS would drop the Accessibility grant after every rebuild. The explicit
+# requirement below matches by bundle identifier only, so the grant survives updates.
+# Trade-off: any binary signed with this identifier passes the same TCC check, which is
+# acceptable for a locally built, unsigned app that only reads the Dock tile frames.
+BUNDLE_ID="dev.sugrob.app"
+codesign --force --sign - \
+    --identifier "$BUNDLE_ID" \
+    --requirements "=designated => identifier \"$BUNDLE_ID\"" \
+    "$APP"
+if ! codesign --verify --strict --verbose=2 "$APP"; then
+    echo "error: codesign could not verify $APP" >&2
+    exit 1
+fi
+REQUIREMENT="$(codesign -d -r- "$APP" 2>&1)"
+if ! grep -Fq "designated => identifier \"$BUNDLE_ID\"" <<<"$REQUIREMENT"; then
+    echo "error: designated requirement is not the bundle identifier:" >&2
+    echo "$REQUIREMENT" >&2
+    exit 1
+fi
+echo "Designated requirement: identifier \"$BUNDLE_ID\""
 
 echo "Built $APP"

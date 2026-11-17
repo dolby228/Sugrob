@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var overlay: OverlayController?
     private var power: PowerMonitor?
     private var mouse: MouseInput?
+    private var onboarding: AccessibilityOnboarding?
     /// Nil when Metal is unavailable; overlays then fall back to `DebugOverlayView`.
     private var pipelines: RenderPipelines?
 
@@ -95,6 +96,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pushSurfaces()
         mouse.start()
         controls.start()
+
+        NotificationCenter.default.addObserver(
+            forName: .sugrobAccessibilityDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let trusted = notification.userInfo?["trusted"] as? Bool
+            MainActor.assumeIsolated {
+                self?.accessibilityChanged(trusted: trusted)
+            }
+        }
+        let onboarding = AccessibilityOnboarding(
+            isSettingsVisible: { [weak controls] in
+                controls?.isSettingsVisible ?? false
+            },
+            highlightInSettings: { [weak controls] in
+                controls?.highlightAccessibility()
+            }
+        )
+        self.onboarding = onboarding
+        onboarding.schedule()
+    }
+
+    /// Access granted: start the AX walk for the exact Dock frame on the next poll (it runs
+    /// in the background; on pause it waits until the snow resumes) and say so, if the user
+    /// asked for it during this launch.
+    private func accessibilityChanged(trusted: Bool?) {
+        guard trusted == true else { return }
+        tracker?.invalidateDockSources()
+        tracker?.poll()
+        pushSurfaces()
+        if AccessibilityAccess.didRequestThisLaunch {
+            menuBar?.showTransientMessage("Готово: сугроб ляжет точно по Dock")
+        } else {
+            log.info("accessibility granted")
+        }
     }
 
     /// Opening Sugrob.app again while it runs: the status item may be hidden by the notch.
@@ -108,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        onboarding?.cancel()
         controls?.stop()
         mouse?.stop()
         tracker?.stop()
