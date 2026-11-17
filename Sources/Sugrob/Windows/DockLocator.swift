@@ -18,6 +18,9 @@ private let log = Logger(subsystem: "dev.sugrob", category: "tracker")
 /// 4. 55% of the strip, centered.
 /// The result is always clipped to the strip.
 ///
+/// With magnification on, the frame on a screen is frozen while the cursor is in its strip
+/// (and `magnificationSettle` after), so the drift never follows the magnified tiles.
+///
 /// Nothing is reported while the Dock is not shown: no reserved strip (auto-hide),
 /// `autohide` set in the preferences, or a full-screen Space (see `fullScreenReason`).
 @MainActor
@@ -47,6 +50,9 @@ final class DockLocator {
     /// …and this often while nothing changes. Launches, quits, preference and strip
     /// changes and a trust change trigger a walk at once.
     static let accessibilityIdleInterval: TimeInterval = 4
+    /// With magnification, the frame stays frozen this long after the cursor leaves the strip
+    /// (the tiles shrink back with an animation).
+    static let magnificationSettle: TimeInterval = 0.5
     /// Share of the strip used when nothing better is known.
     static let guessedShare: CGFloat = 0.55
     /// The AX tile frames cover the icons; the Dock glass reaches this much further out.
@@ -83,6 +89,12 @@ final class DockLocator {
     private var lastWalk: (elements: Int, duration: TimeInterval)?
     /// Strips the last walk was asked about, CG global; a change triggers a walk.
     private var walkStrips: [DockAccessibility.Strip] = []
+    /// Magnification: frames are frozen on a screen until this uptime.
+    private var magnificationHoldUntil: [Int: TimeInterval] = [:]
+    /// When the latest freeze ends; walks started before it are discarded.
+    private var lastMagnificationHold: TimeInterval = -.infinity
+    /// The last frame computed while not frozen, per screen.
+    private var stableFrames: [Int: (frame: CGRect, source: Source)] = [:]
     private var observingChanges = false
     private var pendingRefreshes: [DispatchWorkItem] = []
     private var loggedDockWindows: [WindowListEntry] = []
@@ -96,6 +108,7 @@ final class DockLocator {
     func locate(in list: [WindowListEntry], windows: [TrackedWindow]) -> Result {
         observeChangesIfNeeded()
         let now = ProcessInfo.processInfo.systemUptime
+        updateMagnificationHold(now: now)
         refreshSlowSources(now: now)
         let dockWindows = list.filter { isDockOwned($0) }
         logDockWindows(dockWindows)
@@ -164,6 +177,12 @@ final class DockLocator {
                 let length = (edge == .bottom ? strip.width : strip.height) * Self.guessedShare
                 frame = Self.centered(length: length, in: strip, edge: edge)
                 source = .guess
+            }
+            if isFrozen(id, now: now), let stable = stableFrames[id] {
+                frame = stable.frame
+                source = stable.source
+            } else if let frame {
+                stableFrames[id] = (frame, source)
             }
             guard let frame else { continue }
             let dockCG = Coordinates.cgRect(fromScreenLocal: frame, screenFrame: screenFrame, primaryHeight: primaryHeight)
@@ -291,6 +310,9 @@ final class DockLocator {
             "accessibilityWalkElements": orNull(lastWalk?.elements),
             "accessibilityWalkMs": orNull(lastWalk.map { Int(($0.duration * 1000).rounded()) }),
             "accessibilityWalkInterval": walkInterval,
+            "magnificationFrozen": magnificationHoldUntil
+                .filter { $0.value > ProcessInfo.processInfo.systemUptime }
+                .keys.sorted().map { String($0) },
             "accessibilityLists": lists,
             "accessibilityItems": items,
             "estimate": orNull(preferences?.diagnostics),
@@ -411,7 +433,8 @@ final class DockLocator {
         if strips != walkStrips {
             walkRequested = true
         }
-        guard !walkInFlight else { return }
+        // The magnified tiles are not the Dock's size: wait until the cursor has left.
+        guard !walkInFlight, now >= lastMagnificationHold else { return }
         guard walkRequested || now - lastWalkStart >= walkInterval else { return }
         startWalk(dockPID: pid, strips: strips, now: now)
     }
@@ -466,6 +489,11 @@ final class DockLocator {
             return
         }
         guard AXIsProcessTrusted() else { return }
+        if preferences?.magnification == true, startedAt < lastMagnificationHold {
+            // May have caught the magnified tiles.
+            walkRequested = true
+            return
+        }
         if outcome.tiles != accessibilityTiles {
             accessibilityTiles = outcome.tiles
             walkInterval = Self.accessibilityActiveInterval
@@ -473,6 +501,31 @@ final class DockLocator {
         } else {
             walkInterval = Self.accessibilityIdleInterval
         }
+    }
+
+    /// Magnification on and the cursor in a screen's strip: freeze that screen's frame.
+    private func updateMagnificationHold(now: TimeInterval) {
+        guard preferences?.magnification == true else {
+            magnificationHoldUntil = [:]
+            return
+        }
+        let mouse = NSEvent.mouseLocation
+        let wasFrozen = now < lastMagnificationHold
+        for screen in NSScreen.screens {
+            guard let reserved = Self.reservedStrip(for: screen) else { continue }
+            let cocoa = Coordinates.cocoaRect(fromScreenLocal: reserved.0, screenFrame: screen.frame)
+            guard cocoa.insetBy(dx: -1, dy: -1).contains(mouse) else { continue }
+            let until = now + Self.magnificationSettle
+            magnificationHoldUntil[WindowTracker.dockSurfaceID(for: screen)] = until
+            lastMagnificationHold = max(lastMagnificationHold, until)
+        }
+        if !wasFrozen, now < lastMagnificationHold {
+            log.debug("dock magnification: frame frozen while the cursor is in the strip")
+        }
+    }
+
+    private func isFrozen(_ id: Int, now: TimeInterval) -> Bool {
+        preferences?.magnification == true && (magnificationHoldUntil[id] ?? -.infinity) > now
     }
 
     /// Makes the next poll re-read the slow sources and walk the AX tree.
