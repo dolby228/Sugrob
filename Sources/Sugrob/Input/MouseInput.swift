@@ -40,6 +40,10 @@ final class MouseInput {
     static let captureMinHeight: Float = 0.5
     /// How often capture is re-checked while it is on and no events may arrive.
     static let watchdogInterval: TimeInterval = 0.1
+    /// A cursor move longer than this, or after a longer pause, is a jump: tools act only
+    /// at the new point instead of along a line from the old one.
+    static let maxPathDistance: Float = 300
+    static let maxPathGap: TimeInterval = 0.2
 
     /// Asks the overlay of `screen` to take the mouse; nil gives it back everywhere.
     var onCaptureChange: (@MainActor (_ screen: NSScreen?) -> Void)?
@@ -126,6 +130,8 @@ final class MouseInput {
     /// The current press went to the captured overlay; capture holds until it is released.
     private var capturedPress = false
     private var watchdog: Timer?
+    /// Seconds between the previous pointer event and the current one.
+    private var eventGap: TimeInterval = .infinity
 
     init(settings: Settings, worlds: @escaping WorldProvider) {
         self.settings = settings
@@ -219,6 +225,7 @@ final class MouseInput {
     private func process(_ event: PointerEvent, located: Target?) {
         let type = event.kind
         let cocoa = event.location
+        eventGap = lastCocoa == nil ? .infinity : event.timestamp - lastTimestamp
         trackVelocity(cocoa, timestamp: event.timestamp, reset: type == .down)
         defer { lastCocoa = cocoa }
         defer {
@@ -433,7 +440,7 @@ final class MouseInput {
     }
 
     private func scoopAlongPath(to target: Target) {
-        guard let from = lastPoint, lastWorld === target.world else {
+        guard let from = lastPoint, lastWorld === target.world, !isJump(to: target) else {
             target.world.scoop(at: target.point, depth: 1)
             return
         }
@@ -448,9 +455,10 @@ final class MouseInput {
     }
 
     /// Points from the previous cursor position to the current one, `spacing` apart,
-    /// ending at the current one. Just the current point after a jump between screens.
+    /// ending at the current one. Just the current point after a jump between screens, a
+    /// cursor warp or a long pause: the old position is stale then.
     private func pathSamples(to target: Target, spacing: Float) -> [SIMD2<Float>] {
-        guard let from = lastPoint, lastWorld === target.world else { return [target.point] }
+        guard let from = lastPoint, lastWorld === target.world, !isJump(to: target) else { return [target.point] }
         let d = target.point - from
         let distance = (d.x * d.x + d.y * d.y).squareRoot()
         guard distance > 0.01 else { return [] }
@@ -462,6 +470,14 @@ final class MouseInput {
             samples.append(from + d * t)
         }
         return samples
+    }
+
+    /// True if the cursor did not travel to `target` continuously from `lastPoint`.
+    private func isJump(to target: Target) -> Bool {
+        guard let from = lastPoint else { return true }
+        if eventGap > Self.maxPathGap { return true }
+        let d = target.point - from
+        return (d.x * d.x + d.y * d.y).squareRoot() > Self.maxPathDistance
     }
 
     /// Keeps the blade (and its load) under the cursor, on whichever screen it is.
