@@ -13,7 +13,8 @@ extension SnowWorld {
     public static let maxSnowballRadius: Float = 28
     /// Least snow height (pt) under the cursor needed to pack a new ball.
     public static let minSnowToRoll: Float = 2
-    /// Live snowballs (any state) allowed at once; `beginRoll` refuses past this.
+    /// Live snowballs (any state) allowed at once. Past this `beginRoll` bursts the oldest
+    /// single resting ball to make room, and refuses only if there is none.
     public static let maxSnowballs = 24
     /// Oldest snowmen crumble when more than this many stand.
     public static let maxSnowmen = 8
@@ -42,11 +43,15 @@ extension SnowWorld {
             return id
         }
 
-        guard snowballs.count < SnowWorld.maxSnowballs,
-              let surfaceID = driftSurfaceID(at: point, tolerance: 26, minHeight: SnowWorld.minSnowToRoll),
+        guard let surfaceID = driftSurfaceID(at: point, tolerance: 26, minHeight: SnowWorld.minSnowToRoll),
               let drift = drifts[surfaceID],
               let rect = surfaces[surfaceID]?.rect
         else { return nil }
+        if snowballs.count >= SnowWorld.maxSnowballs {
+            guard let oldest = oldestLooseBallIndex() else { return nil }
+            let old = snowballs.remove(at: oldest)
+            burst(at: old.center, radius: old.radius, ignoring: nil)
+        }
 
         let localX = max(0, min(rect.width, point.x - rect.x))
         let taken = drift.take(aroundX: localX, halfWidth: max(8, drift.columnSpacing), fraction: 0.5)
@@ -57,6 +62,15 @@ extension SnowWorld {
         ball.center = SIMD2(rect.x + localX, restY(rect: rect, drift: drift, localX: localX, radius: radius))
         snowballs.append(ball)
         return ball.id
+    }
+
+    /// True if `beginRoll` at `point` would start a ball: a resting ball to pick up, or
+    /// enough snow within `tolerance` points and room for one more ball.
+    public func canBeginRoll(at point: SIMD2<Float>, tolerance: Float = 26) -> Bool {
+        guard !isPaused, point.x.isFinite, point.y.isFinite else { return false }
+        if pickableBallIndex(near: point) != nil { return true }
+        guard driftSurfaceID(at: point, tolerance: tolerance, minHeight: SnowWorld.minSnowToRoll) != nil else { return false }
+        return snowballs.count < SnowWorld.maxSnowballs || oldestLooseBallIndex() != nil
     }
 
     /// Moves a rolling/held ball to the cursor. On a drift it rolls along the snow surface
@@ -187,6 +201,11 @@ extension SnowWorld {
             if (d.x * d.x + d.y * d.y).squareRoot() <= b.radius + 6 { return i }
         }
         return nil
+    }
+
+    /// The oldest ball lying alone (not part of a stack).
+    private func oldestLooseBallIndex() -> Int? {
+        snowballs.firstIndex { $0.state == .resting && $0.parentID == nil && $0.childID == nil }
     }
 
     private func detachFromParent(_ i: Int) {

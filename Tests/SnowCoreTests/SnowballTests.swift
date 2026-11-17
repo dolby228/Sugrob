@@ -59,6 +59,53 @@ final class SnowballTests: XCTestCase {
         XCTAssertTrue(bare.snowballs.isEmpty)
     }
 
+    func testCanBeginRollNeedsEnoughSnow() {
+        let world = snowyWorld()
+        XCTAssertTrue(world.canBeginRoll(at: SIMD2(300, 292)))
+        XCTAssertFalse(world.canBeginRoll(at: SIMD2(50, 100)))
+
+        let thin = SnowWorld(bounds: screen, seed: 2)
+        thin.particleBudgetScale = 0
+        thin.setSurfaces([window])
+        let drift = thin.drifts[window.id]!
+        for x in stride(from: Float(0), through: window.rect.width, by: 2) {
+            drift.deposit(atX: x, amount: 2.4)
+        }
+        let point = SIMD2<Float>(300, 298)
+        XCTAssertNotNil(thin.driftSurfaceID(at: point, tolerance: 12, minHeight: 0.5))
+        XCTAssertFalse(thin.canBeginRoll(at: point), "too little snow to pack a ball")
+        XCTAssertNil(thin.beginRoll(at: point))
+    }
+
+    func testBeginRollAtCapBurstsOldestRestingBall() {
+        let world = snowyWorld()
+        for i in 0..<SnowWorld.maxSnowballs {
+            var ball = Snowball(id: 1000 + i, center: SIMD2(120 + Float(i) * 14, 282), radius: 5, state: .resting)
+            ball.surfaceID = window.id
+            ball.localX = ball.center.x - window.rect.x
+            world.snowballs.append(ball)
+        }
+        let point = SIMD2<Float>(480, 292)
+        XCTAssertTrue(world.canBeginRoll(at: point))
+        let id = world.beginRoll(at: point)
+        XCTAssertNotNil(id)
+        XCTAssertEqual(world.snowballs.count, SnowWorld.maxSnowballs)
+        XCTAssertNil(ball(world, 1000), "the oldest resting ball made room")
+        XCTAssertNotNil(ball(world, 1001))
+        XCTAssertFalse(world.flakes.isEmpty, "it burst into debris")
+    }
+
+    func testBeginRollAtCapRefusesWithoutRestingBall() {
+        let world = snowyWorld()
+        for i in 0..<SnowWorld.maxSnowballs {
+            world.snowballs.append(Snowball(id: 1000 + i, center: SIMD2(300, 50), radius: 5, state: .falling))
+        }
+        let point = SIMD2<Float>(480, 292)
+        XCTAssertFalse(world.canBeginRoll(at: point))
+        XCTAssertNil(world.beginRoll(at: point))
+        XCTAssertEqual(world.snowballs.count, SnowWorld.maxSnowballs)
+    }
+
     func testRollingConservesSnowAndGrowsBall() {
         let world = snowyWorld()
         let before = world.totalSnow
