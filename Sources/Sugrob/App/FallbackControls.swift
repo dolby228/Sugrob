@@ -67,6 +67,11 @@ final class FallbackControls {
         settingsWindow.show(message: message)
     }
 
+    /// Points at the Accessibility row of the settings window, which must be open.
+    func highlightAccessibility() {
+        settingsWindow.highlightAccessibility()
+    }
+
     private func statusItemHidden(_ reason: String) {
         if settingsWindow.isShowingMessage {
             log.info("status item hidden (\(reason, privacy: .public)), welcome already shown")
