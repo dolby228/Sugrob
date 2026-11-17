@@ -16,6 +16,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     var dockDiagnostics: (() -> [String: Any])?
 
     private var reportedHidden = false
+    /// The popover of `showTransientMessage`.
+    private var transientPopover: NSPopover?
     private var visibilityCheck: DispatchWorkItem?
 
     private let settings: Settings
@@ -123,6 +125,50 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return "button window \(frame) is left of the notch \(notch)"
         }
         return nil
+    }
+
+    /// A short message in a popover under the status item that closes by itself. Only
+    /// logged when the status item cannot be seen.
+    func showTransientMessage(_ text: String, duration: TimeInterval = 3) {
+        guard NSMenu.menuBarVisible(), hiddenReason() == nil,
+              let button = statusItem.button, button.window?.screen != nil
+        else {
+            log.info("message without a visible status item: \(text, privacy: .public)")
+            return
+        }
+        transientPopover?.close()
+
+        let label = NSTextField(labelWithString: text)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        let view = NSView()
+        view.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
+            label.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
+            label.topAnchor.constraint(equalTo: view.topAnchor, constant: 10),
+            label.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -10),
+        ])
+        view.layoutSubtreeIfNeeded()
+        let controller = NSViewController()
+        controller.view = view
+
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.animates = true
+        popover.contentViewController = controller
+        popover.contentSize = view.fittingSize
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        transientPopover = popover
+        log.info("message: \(text, privacy: .public)")
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self, weak popover] in
+            MainActor.assumeIsolated {
+                popover?.close()
+                if let self, self.transientPopover === popover {
+                    self.transientPopover = nil
+                }
+            }
+        }
     }
 
     /// `auxiliaryTop*Area` should be in global coordinates; tolerate screen-local rects.
