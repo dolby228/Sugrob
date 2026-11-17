@@ -51,7 +51,7 @@ public final class Drift {
     var spillCooldownRight: Float = 0
     private var reverseSweep = false
 
-    public init(width: Float, columnSpacing: Float = 4, maxHeight: Float = 48, reposeSlope: Float = 0.35) {
+    public init(width: Float, columnSpacing: Float = 4, maxHeight: Float = 26, reposeSlope: Float = 0.35) {
         let w = Drift.sanitizedWidth(width)
         let spacing = max(0.5, columnSpacing)
         let n = Drift.makeColumnCount(width: w, spacing: spacing)

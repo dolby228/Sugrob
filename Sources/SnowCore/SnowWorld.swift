@@ -29,7 +29,7 @@ public final class SnowWorld {
     /// Snow area (pt²) a landing flake adds, per square point of its size.
     public var depositFactor: Float = 1
     /// Max drift height for newly created drifts.
-    public var driftMaxHeight: Float = 48
+    public var driftMaxHeight: Float = 26
     /// A surface jumping farther than this (points per update) shakes some snow off.
     public var shakeThreshold: Float = 24
     /// Extra flakes allowed above the cap for snow knocked off drifts.
