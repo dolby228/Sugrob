@@ -371,7 +371,10 @@ public final class SnowWorld {
     private func settleDrifts(dt: Float) {
         for entry in entries {
             let drift = entry.drift
-            drift.settle()
+            // A drift nothing touched since it last came to rest has nothing to move.
+            if !drift.isSettled {
+                drift.settle()
+            }
             let r = entry.rect
             drift.spillCooldownLeft -= dt
             drift.spillCooldownRight -= dt

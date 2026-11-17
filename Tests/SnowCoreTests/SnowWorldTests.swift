@@ -391,4 +391,23 @@ final class SnowWorldTests: XCTestCase {
             XCTAssertLessThan(ratio, 1.3, "wind \(wind) overfills the screen")
         }
     }
+
+    func testSettledDriftIsNotSettledAgain() {
+        let world = SnowWorld(bounds: screen, seed: 3)
+        world.particleBudgetScale = 0
+        world.setSurfaces([window])
+        let drift = world.drifts[window.id]!
+        drift.deposit(atX: 200, amount: 4)
+        run(world, steps: 30)
+        XCTAssertTrue(drift.isSettled)
+        let revision = drift.revision
+        let snow = drift.totalSnow
+        run(world, steps: 200)
+        XCTAssertEqual(drift.revision, revision)
+        XCTAssertEqual(drift.totalSnow, snow)
+
+        drift.deposit(atX: 100, amount: 4)
+        XCTAssertFalse(drift.isSettled)
+        XCTAssertNotEqual(drift.revision, revision)
+    }
 }
