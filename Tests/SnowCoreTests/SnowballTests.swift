@@ -255,6 +255,22 @@ final class SnowballTests: XCTestCase {
         XCTAssertEqual(back?.center.y ?? 0, resting.center.y, accuracy: 0.5)
     }
 
+    func testClosedSurfaceDropsSnowmanAndBalls() {
+        let world = worldWithSnowman()
+        let id = rollAndDrop(world, from: 450)
+        runUntilSettled(world)
+        XCTAssertEqual(ball(world, id)?.state, .resting)
+        world.setSurfaces([])
+        XCTAssertTrue(world.snowmen.isEmpty)
+        XCTAssertNil(ball(world, id))
+
+        world.closeSurfaces([window.id])
+        XCTAssertTrue(world.snowmen.isEmpty)
+        XCTAssertEqual(world.snowballs.count, 4, "three from the snowman and the lone ball")
+        XCTAssertTrue(world.snowballs.allSatisfy { $0.state == .falling && $0.surfaceID == nil })
+        XCTAssertEqual(ball(world, id)?.state, .falling)
+    }
+
     func testSnowmanWaitsForItsWindow() {
         let world = worldWithSnowman()
         let man = world.snowmen[0]

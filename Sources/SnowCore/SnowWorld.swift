@@ -184,6 +184,21 @@ public final class SnowWorld {
         }
     }
 
+    /// The windows behind `ids` were closed, not just moved off screen. A surface that went
+    /// missing within `missingGrace` crumbles where it stood: its snow falls as debris and
+    /// its snowballs and snowmen fall. One missing for longer is forgotten without debris,
+    /// since nothing is on screen there any more. Ids still on screen are left alone.
+    public func closeSurfaces(_ ids: Set<Int>) {
+        for id in ids {
+            guard let record = dormant.removeValue(forKey: id) else { continue }
+            guard time - record.since <= missingGrace else { continue }
+            let drift = record.drift
+            emitPieces(fromDrift: drift, rect: record.rect, amount: drift.totalSnow, maxPieces: 150, ignoring: nil)
+            drift.clear()
+            dropStashedSnowObjects(record)
+        }
+    }
+
     /// Forgets the oldest dormant surfaces beyond `maxDormantSurfaces`.
     private func trimDormant() {
         while dormant.count > SnowWorld.maxDormantSurfaces {

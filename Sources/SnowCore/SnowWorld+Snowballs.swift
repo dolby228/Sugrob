@@ -296,6 +296,23 @@ extension SnowWorld {
         followSurfaces()
     }
 
+    /// The surface of a dormant record was closed: what stood on it falls from where it was.
+    func dropStashedSnowObjects(_ record: DormantSurface) {
+        let velocity = SIMD2<Float>(0, -20)
+        for var ball in record.snowballs {
+            ball.state = .falling
+            ball.parentID = nil
+            ball.childID = nil
+            ball.surfaceID = nil
+            ball.ignoredSurfaceID = nil
+            ball.velocity = velocity + SIMD2(rng.signedUnit() * 40, -rng.unit() * 40)
+            snowballs.append(ball)
+        }
+        for man in record.snowmen {
+            topple(man, velocity: velocity, ignoring: nil)
+        }
+    }
+
     func snowObjectsSurfacesChanged(removed: Set<Int>, shaken: [Int: SIMD2<Float>]) {
         // A rolling ball whose drift vanished is just held by the cursor now.
         for i in snowballs.indices where snowballs[i].state == .rolling {
@@ -355,7 +372,10 @@ extension SnowWorld {
 
     /// Breaks a snowman into its three balls, which fall.
     private func topple(snowmanAt k: Int, velocity: SIMD2<Float>, ignoring surfaceID: Int?) {
-        let man = snowmen.remove(at: k)
+        topple(snowmen.remove(at: k), velocity: velocity, ignoring: surfaceID)
+    }
+
+    private func topple(_ man: Snowman, velocity: SIMD2<Float>, ignoring surfaceID: Int?) {
         for (center, radius) in zip(man.centers, man.radii) {
             var ball = Snowball(id: makeObjectID(), center: center, radius: radius, state: .falling)
             ball.ignoredSurfaceID = surfaceID

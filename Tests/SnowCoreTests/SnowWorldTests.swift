@@ -73,6 +73,45 @@ final class SnowWorldTests: XCTestCase {
         XCTAssertTrue(world.flakes.isEmpty)
     }
 
+    /// A closed window (not just off screen) crumbles as before.
+    func testClosedSurfaceCrumblesIntoFallingFlakes() {
+        let world = snowyWorld()
+        XCTAssertGreaterThan(world.totalSnow, 0)
+        world.setSurfaces([])
+        XCTAssertTrue(world.flakes.isEmpty)
+        world.closeSurfaces([window.id])
+        XCTAssertTrue(world.dormantSurfaceIDs.isEmpty)
+        XCTAssertFalse(world.flakes.isEmpty)
+        XCTAssertTrue(world.flakes.allSatisfy { $0.isDebris })
+        let startY = world.flakes.reduce(Float(0)) { $0 + $1.position.y } / Float(world.flakes.count)
+        XCTAssertLessThan(startY, window.rect.y + 1)
+        run(world, steps: 30)
+        XCTAssertFalse(world.flakes.isEmpty)
+        let laterY = world.flakes.reduce(Float(0)) { $0 + $1.position.y } / Float(world.flakes.count)
+        XCTAssertGreaterThan(laterY, startY)
+
+        // It does not come back.
+        world.setSurfaces([window])
+        XCTAssertEqual(world.totalSnow, 0)
+    }
+
+    func testClosingIgnoresVisibleAndLongGoneSurfaces() {
+        let world = snowyWorld()
+        let before = world.totalSnow
+        world.closeSurfaces([window.id])
+        XCTAssertEqual(world.totalSnow, before, "a window still on screen is not closed")
+        XCTAssertTrue(world.flakes.isEmpty)
+
+        // Gone for a while (another Space), then closed there: forgotten, no debris here.
+        world.setSurfaces([])
+        run(world, steps: 30, dt: 0.1)
+        world.closeSurfaces([window.id])
+        XCTAssertTrue(world.dormantSurfaceIDs.isEmpty)
+        XCTAssertTrue(world.flakes.isEmpty)
+        world.setSurfaces([window])
+        XCTAssertEqual(world.totalSnow, 0)
+    }
+
     func testDormantDriftIsNotHitByFlakes() {
         let world = SnowWorld(bounds: screen, seed: 12, preset: .blizzard)
         world.setSurfaces([window])
