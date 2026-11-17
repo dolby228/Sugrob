@@ -29,4 +29,16 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/Sugrob.zip --title "Sugrob $GITHUB_REF_NAME" --generate-notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # The section of CHANGELOG.md for this version, without its heading.
+          awk -v v="$version" '
+            /^## \[/ { if (found) exit; if (index($0, "## [" v "]") == 1) { found = 1; next } }
+            found && !/^\[[^]]+\]: /
+          ' CHANGELOG.md > notes.md
+          if [[ -s notes.md ]]; then
+            gh release create "$GITHUB_REF_NAME" dist/Sugrob.zip --title "Sugrob $GITHUB_REF_NAME" --notes-file notes.md
+          else
+            echo "no CHANGELOG section for $version, generating notes"
+            gh release create "$GITHUB_REF_NAME" dist/Sugrob.zip --title "Sugrob $GITHUB_REF_NAME" --generate-notes
+          fi
