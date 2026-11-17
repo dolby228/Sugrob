@@ -24,6 +24,9 @@ final class OverlayWindow: NSPanel {
         acceptsMouseMovedEvents = true
         // Panels hide on deactivation by default; Sugrob is practically never active.
         hidesOnDeactivate = false
+        // ⌥-click on another app or the desktop hides the active app (and ⌘H, «Скрыть
+        // остальные»): when that is Sugrob, the snow must stay, only its own windows hide.
+        canHide = false
         becomesKeyOnlyIfNeeded = true
         // `.statusBar` (25) sits above normal and floating windows, the Dock (20) and the
         // menu bar (24), so snow is visible over everything that can carry a drift.
