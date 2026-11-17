@@ -352,4 +352,43 @@ final class SnowWorldTests: XCTestCase {
         XCTAssertLessThanOrEqual(edgeDensity, 3 * besideDensity,
                                  "flakes crowd the window sides: \(nearEdge) near edges vs \(beside) beside")
     }
+
+    func testSpawnBandFactorFollowsWind() {
+        let world = SnowWorld(bounds: Rect(x: 0, y: 0, width: 1000, height: 800), seed: 1, preset: .steady)
+        XCTAssertEqual(world.spawnWidthFactor, 1)
+        XCTAssertEqual(world.spawnCap, world.flakeCap)
+        world.wind = Wind(x: 1)
+        XCTAssertEqual(world.spawnWidthFactor, 2, accuracy: 1e-4)
+        world.wind = Wind(x: -1)
+        XCTAssertEqual(world.spawnWidthFactor, 2, accuracy: 1e-4)
+        XCTAssertGreaterThan(world.spawnCap, world.flakeCap)
+        world.wind = Wind(x: 0.1)
+        XCTAssertGreaterThan(world.spawnWidthFactor, 1)
+        XCTAssertLessThan(world.spawnWidthFactor, 2)
+    }
+
+    /// Flakes spawned upwind must reach the screen, so wind does not thin the snowfall.
+    func testWindKeepsOnScreenDensity() {
+        let bounds = Rect(x: 0, y: 0, width: 1000, height: 800)
+        func onScreen(wind: Float) -> Float {
+            let world = SnowWorld(bounds: bounds, seed: 21, preset: .steady)
+            world.wind = Wind(x: wind)
+            var sum = 0
+            var samples = 0
+            for step in 0..<1500 {
+                world.step(dt: 1.0 / 30.0)
+                guard step > 700 else { continue }
+                sum += world.flakes.filter { bounds.contains($0.position) }.count
+                samples += 1
+            }
+            return Float(sum) / Float(max(1, samples))
+        }
+        let calm = onScreen(wind: 0)
+        XCTAssertGreaterThan(calm, 100)
+        for wind: Float in [0.1, 0.5, 1, -1] {
+            let ratio = onScreen(wind: wind) / calm
+            XCTAssertGreaterThan(ratio, 0.85, "wind \(wind) thins the snow")
+            XCTAssertLessThan(ratio, 1.3, "wind \(wind) overfills the screen")
+        }
+    }
 }

@@ -239,9 +239,35 @@ public final class SnowWorld {
         stepClumps(dt: dt)
     }
 
+    /// How far upwind of the bounds a flake falling at `fall` pt/s has to start to drift
+    /// across the whole screen: positive when the wind blows right, at most one bounds width.
+    private func upwindShift(fall: Float) -> Float {
+        let travelTime = max(0, bounds.height) / max(1, fall * max(0.25, wind.fallMultiplier))
+        let width = max(0, bounds.width)
+        return max(-width, min(width, wind.horizontalSpeed * travelTime))
+    }
+
+    /// Width of the spawn band (bounds plus the upwind extension) over the bounds width,
+    /// 1...2. The spawn rate scales with it so the screen gets the same density in wind.
+    var spawnWidthFactor: Float {
+        let width = bounds.width
+        guard width > 0, width.isFinite else { return 1 }
+        let fall = preset.fallSpeedRange
+        let shift = upwindShift(fall: (fall.lowerBound + fall.upperBound) * 0.5)
+        return max(1, min(2, (width + abs(shift)) / width))
+    }
+
+    /// Flake cap including the flakes still upwind of the bounds. A flake spawned upwind
+    /// spends part of its life off screen before it enters, but is culled soon after it
+    /// leaves downwind, so on average it needs half the band extension, not all of it.
+    var spawnCap: Int {
+        Int((Float(flakeCap) * (1 + spawnWidthFactor) * 0.5).rounded())
+    }
+
     private func spawn(dt: Float) {
-        let cap = flakeCap
-        let rate = preset.spawnRatePer1000 * max(0, bounds.width) / 1000 * particleBudgetScale
+        let widthFactor = spawnWidthFactor
+        let cap = spawnCap
+        let rate = preset.spawnRatePer1000 * max(0, bounds.width) / 1000 * particleBudgetScale * widthFactor
         spawnAccumulator += rate * dt
         while spawnAccumulator >= 1 {
             guard flakes.count < cap else {
@@ -258,8 +284,7 @@ public final class SnowWorld {
         let size = rng.float(in: sizes)
         let fall = rng.float(in: preset.fallSpeedRange)
         // Spawn wider on the upwind side so the screen stays evenly covered.
-        let travelTime = max(0, bounds.height) / max(1, fall * max(0.25, wind.fallMultiplier))
-        let shift = max(-bounds.width, min(bounds.width, wind.horizontalSpeed * travelTime))
+        let shift = upwindShift(fall: fall)
         let minX = bounds.x - max(0, shift)
         let maxX = bounds.maxX - min(0, shift)
         let x = minX + (maxX - minX) * rng.unit()
@@ -301,11 +326,13 @@ public final class SnowWorld {
             f.position += f.velocity * dt
             f.rotation += f.spin * dt
 
+            // Off the side and the wind keeps it there. The flake's own velocity is not
+            // enough: sway briefly turns it back, which culled flakes spawned upwind.
             let p = f.position
             let gone = p.y > bottom
                 || p.x < farLeft || p.x > farRight
-                || (p.x < left && f.velocity.x <= 0)
-                || (p.x > right && f.velocity.x >= 0)
+                || (p.x < left && windX <= 0)
+                || (p.x > right && windX >= 0)
             if gone || (f.velocity.y > 0 && land(f, previousY: prevY)) {
                 flakes[i] = flakes[flakes.count - 1]
                 flakes.removeLast()
@@ -427,7 +454,7 @@ public final class SnowWorld {
     // MARK: - Debris
 
     var debrisLimit: Int {
-        flakeCap + Int(Float(SnowWorld.debrisAllowance) * max(0.25, particleBudgetScale))
+        spawnCap + Int(Float(SnowWorld.debrisAllowance) * max(0.25, particleBudgetScale))
     }
 
     func emitDebris(at position: SIMD2<Float>, velocity: SIMD2<Float>, size: Float, ignoring id: Int?) {
