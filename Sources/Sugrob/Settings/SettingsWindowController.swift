@@ -278,6 +278,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         debugCheckbox.toolTip = forced ? "Включено через SUGROB_DEBUG_WINDOWS=1" : nil
 
         loginCheckbox.state = LaunchAtLogin.isEnabled ? .on : .off
+        loginCheckbox.toolTip = LaunchAtLogin.hint
         dockCheckbox.state = settings.showInDock ? .on : .off
         refreshAccessibility()
     }
