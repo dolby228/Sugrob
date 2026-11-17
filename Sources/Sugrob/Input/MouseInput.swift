@@ -18,7 +18,9 @@ private let log = Logger(subsystem: "dev.sugrob", category: "input")
 /// - a press that started captured has not been released yet.
 /// The captured overlay's `SnowView` then feeds its events into the same handler. The
 /// mitten only hovers and never captures. Capture is re-checked on every move and
-/// modifier change, and by a watchdog timer while it is on.
+/// modifier change, and by a watchdog timer while it is on. Without Accessibility the
+/// global monitor gets no `flagsChanged`, so while the cursor is over snow and nothing
+/// is captured, a hover timer polls the modifiers.
 ///
 /// - Варежка (mitten): moving the cursor with no button pressed sweeps snow off drifts,
 ///   kicking it in the direction of movement.
@@ -45,6 +47,8 @@ final class MouseInput {
     /// at the new point instead of along a line from the old one.
     static let maxPathDistance: Float = 300
     static let maxPathGap: TimeInterval = 0.2
+    /// How often modifiers are polled while the cursor hovers over snow uncaptured.
+    static let hoverInterval: TimeInterval = 0.1
 
     /// Asks the overlay of `screen` to take the mouse; nil gives it back everywhere.
     var onCaptureChange: (@MainActor (_ screen: NSScreen?) -> Void)?
@@ -131,6 +135,7 @@ final class MouseInput {
     /// The current press went to the captured overlay; capture holds until it is released.
     private var capturedPress = false
     private var watchdog: Timer?
+    private var hoverTimer: Timer?
     /// Seconds between the previous pointer event and the current one.
     private var eventGap: TimeInterval = .infinity
 
@@ -176,6 +181,7 @@ final class MouseInput {
         capturedPress = false
         dumpCarriedLoad()
         setCapture(nil)
+        stopHoverPoll()
     }
 
     /// Switching away from the shovel drops what it carries.
@@ -351,6 +357,7 @@ final class MouseInput {
             if captureDisplay != nil { NSCursor.closedHand.set() }
             return
         }
+        defer { updateHoverPoll(at: target) }
         // A button held down for another app (dragging a window over a drift).
         if NSEvent.pressedMouseButtons & 1 != 0 {
             setCapture(nil)
@@ -432,6 +439,43 @@ final class MouseInput {
         }
         optionDown = option
         updateCapture(at: locate(location))
+    }
+
+    /// Polls the modifiers while the cursor is over snow and nothing is captured:
+    /// `flagsChanged` does not reach the global monitor without Accessibility, so
+    /// pressing ⌥ over a still cursor would otherwise do nothing.
+    private func updateHoverPoll(at target: Target?) {
+        var wanted = false
+        if captureDisplay == nil, !settings.isPaused, let target {
+            wanted = target.world.canBeginRoll(at: target.point, tolerance: Self.captureTolerance)
+        }
+        if wanted { startHoverPoll() } else { stopHoverPoll() }
+    }
+
+    private func startHoverPoll() {
+        guard hoverTimer == nil else { return }
+        let timer = Timer(timeInterval: Self.hoverInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.hoverTick()
+            }
+        }
+        timer.tolerance = Self.hoverInterval * 0.2
+        RunLoop.main.add(timer, forMode: .common)
+        hoverTimer = timer
+    }
+
+    private func stopHoverPoll() {
+        hoverTimer?.invalidate()
+        hoverTimer = nil
+    }
+
+    private func hoverTick() {
+        guard captureDisplay == nil else {
+            stopHoverPoll()
+            return
+        }
+        optionDown = NSEvent.modifierFlags.contains(.option)
+        updateCapture(at: locate(NSEvent.mouseLocation))
     }
 
     // MARK: Tools
