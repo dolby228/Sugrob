@@ -237,13 +237,55 @@ final class SnowballTests: XCTestCase {
         XCTAssertTrue(burst, "balls break into debris at the bottom")
     }
 
-    func testRemovedSurfaceDropsRestingBall() {
+    func testMissingSurfaceKeepsRestingBallUntilItReturns() {
         let world = snowyWorld()
         let id = rollAndDrop(world, from: 200)
         runUntilSettled(world)
+        let resting = ball(world, id)!
+        XCTAssertEqual(resting.state, .resting)
+
+        world.setSurfaces([])
+        XCTAssertNil(ball(world, id), "a ball on a missing window is put aside, not drawn")
+        world.step(dt: 1.0 / 60.0)
+        world.setSurfaces([window])
+        let back = ball(world, id)
+        XCTAssertEqual(back?.state, .resting)
+        XCTAssertEqual(back?.surfaceID, window.id)
+        XCTAssertEqual(back?.center.x ?? 0, resting.center.x, accuracy: 0.5)
+        XCTAssertEqual(back?.center.y ?? 0, resting.center.y, accuracy: 0.5)
+    }
+
+    func testClosedSurfaceDropsSnowmanAndBalls() {
+        let world = worldWithSnowman()
+        let id = rollAndDrop(world, from: 450)
+        runUntilSettled(world)
         XCTAssertEqual(ball(world, id)?.state, .resting)
         world.setSurfaces([])
+        XCTAssertTrue(world.snowmen.isEmpty)
+        XCTAssertNil(ball(world, id))
+
+        world.closeSurfaces([window.id])
+        XCTAssertTrue(world.snowmen.isEmpty)
+        XCTAssertEqual(world.snowballs.count, 4, "three from the snowman and the lone ball")
+        XCTAssertTrue(world.snowballs.allSatisfy { $0.state == .falling && $0.surfaceID == nil })
         XCTAssertEqual(ball(world, id)?.state, .falling)
+    }
+
+    func testSnowmanWaitsForItsWindow() {
+        let world = worldWithSnowman()
+        let man = world.snowmen[0]
+        world.setSurfaces([])
+        XCTAssertTrue(world.snowmen.isEmpty)
+        XCTAssertTrue(world.snowballs.isEmpty)
+
+        // Back after a while and a little to the right: no shake, it stands where it was.
+        run(world, steps: 60, dt: 0.1)
+        var moved = window
+        moved.rect.x += 40
+        world.setSurfaces([moved])
+        XCTAssertEqual(world.snowmen.count, 1)
+        XCTAssertEqual(world.snowmen[0].id, man.id)
+        XCTAssertEqual(world.snowmen[0].position.x, man.position.x + 40, accuracy: 0.5)
     }
 
     func testClearAllRemovesBallsAndSnowmen() {

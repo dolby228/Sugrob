@@ -66,6 +66,19 @@ final class WindowTracker: NSObject {
         }
     }
 
+    /// Windows that left the on-screen list, with when they did. Off screen is not closed
+    /// (another Space, minimized, hidden app), so each is looked up until it is gone.
+    private var missingWindows: [CGWindowID: TimeInterval] = [:]
+    private var lastMissingRecheck: TimeInterval = 0
+    /// Closed windows found since the last `takeClosedWindowIDs`.
+    private var closedWindowIDs: Set<CGWindowID> = []
+    /// A window missing for less than this is looked up on every poll (closing animations).
+    static let freshMissingAge: TimeInterval = 1
+    /// Older missing windows are looked up this often, all in one call.
+    static let missingRecheckInterval: TimeInterval = 3
+    /// Missing windows are given up on after this long (the snow forgets them too).
+    static let missingWatchLimit: TimeInterval = 600
+
     private var timer: Timer?
     private var dockFrames: [Int: CGRect] = [:]
     /// System panels in front of all ordinary windows, front to back, CG global.
@@ -185,7 +198,10 @@ final class WindowTracker: NSObject {
         let covered = findCoveredDisplays(in: list, optionDown: NSEvent.modifierFlags.contains(.option))
         let coveredChanged = covered != coveredDisplays
 
-        guard !events.isEmpty || orderChanged || docksChanged || panelsChanged || coveredChanged else { return }
+        let closedFound = trackMissingWindows(events: events, current: current)
+
+        guard !events.isEmpty || orderChanged || docksChanged || panelsChanged || coveredChanged || closedFound
+        else { return }
 
         windows = current
         dockFrames = docks
@@ -212,6 +228,80 @@ final class WindowTracker: NSObject {
             log.info("displays covered by a system panel: [\(summary, privacy: .public)]")
         }
         onUpdate?(current, events)
+    }
+
+    // MARK: Closed windows
+
+    /// Window ids found closed (gone from the window server, not just off screen) since the
+    /// last call. The snow of a closed window crumbles; one only off screen waits for it.
+    func takeClosedWindowIDs() -> Set<CGWindowID> {
+        let ids = closedWindowIDs
+        closedWindowIDs.removeAll()
+        return ids
+    }
+
+    /// Records windows that just left the on-screen list and looks up the missing ones:
+    /// fresh ones every poll, older ones every `missingRecheckInterval`. Returns true if one
+    /// turned out to be closed.
+    private func trackMissingWindows(events: [WindowEvent], current: [TrackedWindow]) -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        for event in events {
+            if case .removed(let id) = event {
+                missingWindows[id] = now
+            }
+        }
+        guard !missingWindows.isEmpty else { return false }
+        for window in current where missingWindows[window.id] != nil {
+            missingWindows[window.id] = nil
+        }
+
+        let recheckAll = now - lastMissingRecheck >= Self.missingRecheckInterval
+        if recheckAll {
+            lastMissingRecheck = now
+        }
+        var lookup: [CGWindowID] = []
+        for (id, since) in Array(missingWindows) {
+            if now - since > Self.missingWatchLimit {
+                missingWindows[id] = nil
+            } else if recheckAll || now - since < Self.freshMissingAge {
+                lookup.append(id)
+            }
+        }
+        guard !lookup.isEmpty else { return false }
+
+        guard let existing = Self.existingWindowIDs(lookup) else { return false }
+        var found = false
+        for id in lookup where !existing.contains(id) {
+            missingWindows[id] = nil
+            closedWindowIDs.insert(id)
+            found = true
+            log.debug("closed \(Int(id))")
+        }
+        return found
+    }
+
+    /// Which of `ids` the window server still knows, on screen or not; nil if the lookup failed.
+    static func existingWindowIDs(_ ids: [CGWindowID]) -> Set<CGWindowID>? {
+        guard !ids.isEmpty else { return [] }
+        // The array holds the window numbers themselves as pointer-sized values.
+        let values = UnsafeMutablePointer<UnsafeRawPointer?>.allocate(capacity: ids.count)
+        defer { values.deallocate() }
+        for (i, id) in ids.enumerated() {
+            values[i] = UnsafeRawPointer(bitPattern: UInt(id))
+        }
+        guard let array = CFArrayCreate(kCFAllocatorDefault, values, ids.count, nil),
+              let info = CGWindowListCreateDescriptionFromArray(array) as? [[String: Any]]
+        else {
+            log.debug("CGWindowListCreateDescriptionFromArray returned nil")
+            return nil
+        }
+        var result = Set<CGWindowID>()
+        for entry in info {
+            if let number = (entry[kCGWindowNumber as String] as? NSNumber)?.uint32Value {
+                result.insert(number)
+            }
+        }
+        return result
     }
 
     // MARK: Surfaces

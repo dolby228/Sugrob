@@ -195,4 +195,57 @@ final class DriftTests: XCTestCase {
         XCTAssertEqual(drift.clear(), 5, accuracy: 1e-4)
         XCTAssertTrue(drift.isEmpty)
     }
+
+    func testRevisionTracksHeightChanges() {
+        let drift = Drift(width: 100, maxHeight: 10)
+        let start = drift.revision
+        drift.deposit(atX: 50, amount: 5)
+        XCTAssertNotEqual(drift.revision, start)
+
+        // Nothing to take, nothing accepted: no change.
+        let swept = drift.revision
+        XCTAssertEqual(drift.sweep(center: SIMD2(50, -40), radius: 5), 0)
+        XCTAssertEqual(drift.revision, swept)
+
+        for _ in 0..<200 { drift.deposit(atX: 50, amount: 50) }
+        let full = drift.revision
+        XCTAssertEqual(drift.deposit(atX: 50, amount: 1), 0, "columns around x = 50 are full")
+        XCTAssertEqual(drift.revision, full)
+
+        let cleared = drift.revision
+        drift.clear()
+        XCTAssertNotEqual(drift.revision, cleared)
+    }
+
+    func testSettleComesToRest() {
+        let drift = Drift(width: 200)
+        for _ in 0..<60 { drift.deposit(atX: 100, amount: 30) }
+        XCTAssertFalse(drift.isSettled)
+        var passes = 0
+        while !drift.isSettled && passes < 20000 {
+            drift.settle()
+            passes += 1
+        }
+        XCTAssertTrue(drift.isSettled, "still moving after \(passes) passes")
+        XCTAssertFalse(drift.isEmpty)
+
+        drift.deposit(atX: 30, amount: 2)
+        XCTAssertFalse(drift.isSettled)
+        drift.settle()
+        drift.bumpHold = 0.5
+        XCTAssertFalse(drift.isSettled, "changing a settling parameter wakes the drift")
+    }
+
+    func testCrumbsCountAsEmpty() {
+        let drift = Drift(width: 400)
+        drift.deposit(atX: 200, amount: 0.001)
+        XCTAssertGreaterThan(drift.totalSnow, 0)
+        XCTAssertLessThan(drift.peakHeight, Drift.bareHeight)
+        XCTAssertTrue(drift.isEmpty)
+
+        drift.deposit(atX: 200, amount: 5)
+        XCTAssertFalse(drift.isEmpty)
+        drift.clear()
+        XCTAssertTrue(drift.isEmpty)
+    }
 }

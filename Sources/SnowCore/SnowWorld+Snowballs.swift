@@ -6,8 +6,8 @@ import Foundation
 /// snow (its area is taken from the drift, so snow is conserved), and after `releaseBall`
 /// it falls until it lands on a drift or on the top ball of a stack. Three stacked balls
 /// turn into a `Snowman`. Resting balls and snowmen ride along with their surface; a hard
-/// shake or a vanished surface knocks them off, and a ball that reaches the bottom of the
-/// bounds bursts into debris flakes.
+/// shake knocks them off, a missing surface keeps them aside until it returns, and a ball
+/// that reaches the bottom of the bounds bursts into debris flakes.
 extension SnowWorld {
     public static let minSnowballRadius: Float = 4
     public static let maxSnowballRadius: Float = 28
@@ -259,6 +259,60 @@ extension SnowWorld {
 
     // MARK: - Surface changes
 
+    /// Puts resting snowballs and snowmen on surfaces that just went missing aside with
+    /// their dormant drift, so they are neither drawn nor hit until the surface returns.
+    func stashSnowObjects(on missing: Set<Int>) {
+        guard !snowballs.isEmpty || !snowmen.isEmpty else { return }
+        var i = 0
+        while i < snowballs.count {
+            let ball = snowballs[i]
+            if ball.state == .resting, let id = ball.surfaceID, missing.contains(id), dormant[id] != nil {
+                dormant[id]?.snowballs.append(ball)
+                snowballs.remove(at: i)
+            } else {
+                i += 1
+            }
+        }
+        var k = 0
+        while k < snowmen.count {
+            let id = snowmen[k].surfaceID
+            if missing.contains(id), dormant[id] != nil {
+                let man = snowmen.remove(at: k)
+                dormant[id]?.snowmen.append(man)
+            } else {
+                k += 1
+            }
+        }
+    }
+
+    /// Puts the stashed objects of surfaces that came back where they stood.
+    func restoreSnowObjects(from woken: [DormantSurface]) {
+        for record in woken {
+            snowballs.append(contentsOf: record.snowballs)
+            for man in record.snowmen where snowmen.count < SnowWorld.maxSnowmen {
+                snowmen.append(man)
+            }
+        }
+        followSurfaces()
+    }
+
+    /// The surface of a dormant record was closed: what stood on it falls from where it was.
+    func dropStashedSnowObjects(_ record: DormantSurface) {
+        let velocity = SIMD2<Float>(0, -20)
+        for var ball in record.snowballs {
+            ball.state = .falling
+            ball.parentID = nil
+            ball.childID = nil
+            ball.surfaceID = nil
+            ball.ignoredSurfaceID = nil
+            ball.velocity = velocity + SIMD2(rng.signedUnit() * 40, -rng.unit() * 40)
+            snowballs.append(ball)
+        }
+        for man in record.snowmen {
+            topple(man, velocity: velocity, ignoring: nil)
+        }
+    }
+
     func snowObjectsSurfacesChanged(removed: Set<Int>, shaken: [Int: SIMD2<Float>]) {
         // A rolling ball whose drift vanished is just held by the cursor now.
         for i in snowballs.indices where snowballs[i].state == .rolling {
@@ -318,7 +372,10 @@ extension SnowWorld {
 
     /// Breaks a snowman into its three balls, which fall.
     private func topple(snowmanAt k: Int, velocity: SIMD2<Float>, ignoring surfaceID: Int?) {
-        let man = snowmen.remove(at: k)
+        topple(snowmen.remove(at: k), velocity: velocity, ignoring: surfaceID)
+    }
+
+    private func topple(_ man: Snowman, velocity: SIMD2<Float>, ignoring surfaceID: Int?) {
         for (center, radius) in zip(man.centers, man.radii) {
             var ball = Snowball(id: makeObjectID(), center: center, radius: radius, state: .falling)
             ball.ignoredSurfaceID = surfaceID
@@ -357,7 +414,7 @@ extension SnowWorld {
     }
 
     /// Rolling balls, resting stacks and snowmen sit on their (possibly moved) surfaces.
-    private func followSurfaces() {
+    func followSurfaces() {
         for i in snowballs.indices {
             let b = snowballs[i]
             guard b.state == .rolling || (b.state == .resting && b.parentID == nil),

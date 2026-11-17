@@ -11,16 +11,35 @@ public final class Drift {
     /// Actual distance between columns; never larger than `preferredSpacing`.
     public private(set) var columnSpacing: Float
     public private(set) var heights: [Float]
-    public var maxHeight: Float
+    public var maxHeight: Float {
+        didSet { isSettled = false }
+    }
     /// Largest rise per point of run that snow can hold (tangent of the angle of repose).
-    public var reposeSlope: Float
+    public var reposeSlope: Float {
+        didSet { isSettled = false }
+    }
     /// Height the outermost columns can keep, in units of one repose step. A slightly
     /// taller lip keeps more snow on the window, so less of it slides off the ends.
-    public var edgeHold: Float = 2
+    public var edgeHold: Float = 2 {
+        didSet { isSettled = false }
+    }
     /// Largest height (pt) a column may stand above or sink below the mean of its two
     /// neighbours. `settle` diffuses anything beyond that, which rounds peaks and fills
     /// notches so the bank keeps a soft outline instead of a sawtooth.
-    public var bumpHold: Float = 0.12
+    public var bumpHold: Float = 0.12 {
+        didSet { isSettled = false }
+    }
+
+    /// Changes whenever `heights` do, so anything derived from them (the renderer's
+    /// outline) can be cached per revision.
+    public private(set) var revision: UInt64 = 0
+    /// True once `settle` found nothing left to move. Any change to the heights or to the
+    /// settling parameters clears it; `SnowWorld` skips settling settled drifts.
+    public private(set) var isSettled = false
+    /// Columns lower than this (pt) count as bare: diffusion leaves such crumbs behind.
+    public static let bareHeight: Float = 1e-3
+    /// A settle pass moving no column by more than this (pt) leaves the drift settled.
+    static let settleTolerance: Float = 1e-4
     /// Spread (standard deviation, pt) of the gaussian a single deposit is smeared over.
     public var depositSpread: Float = 6
 
@@ -60,8 +79,22 @@ public final class Drift {
         heights.max() ?? 0
     }
 
+    /// No column reaches `bareHeight`.
     public var isEmpty: Bool {
-        !heights.contains { $0 > 0 }
+        if emptyRevision != revision {
+            cachedEmpty = !heights.contains { $0 >= Drift.bareHeight }
+            emptyRevision = revision
+        }
+        return cachedEmpty
+    }
+
+    private var cachedEmpty = true
+    private var emptyRevision: UInt64 = 0
+
+    /// Records a change of `heights`.
+    private func touch() {
+        revision &+= 1
+        isSettled = false
     }
 
     /// Linearly interpolated snow height; 0 outside the surface.
@@ -117,10 +150,13 @@ public final class Drift {
         var reverse = reverseSweep
         var spillLeft: Float = 0
         var spillRight: Float = 0
+        // Largest single move of the last pass, and whether anything moved at all.
+        var lastPassMove: Float = 0
+        var changed = false
 
         heights.withUnsafeMutableBufferPointer { h in
             for _ in 0..<passes {
-                smooth(h, limit: bump)
+                var largest = smooth(h, limit: bump)
                 for k in 0..<(n - 1) {
                     let i = reverse ? n - 2 - k : k
                     let diff = h[i] - h[i + 1]
@@ -128,27 +164,35 @@ public final class Drift {
                         let m = (diff - maxStep) * 0.5
                         h[i] -= m
                         h[i + 1] += m
+                        largest = max(largest, m)
                     } else if diff < -maxStep {
                         let m = (-diff - maxStep) * 0.5
                         h[i] += m
                         h[i + 1] -= m
+                        largest = max(largest, m)
                     }
                 }
                 if h[0] > edgeMax {
                     let m = (h[0] - edgeMax) * 0.5
                     h[0] -= m
                     spillLeft += m
+                    largest = max(largest, m)
                 }
                 if h[n - 1] > edgeMax {
                     let m = (h[n - 1] - edgeMax) * 0.5
                     h[n - 1] -= m
                     spillRight += m
+                    largest = max(largest, m)
                 }
                 reverse.toggle()
+                lastPassMove = largest
+                if largest > 0 { changed = true }
             }
         }
 
         reverseSweep = reverse
+        if changed { revision &+= 1 }
+        isSettled = lastPassMove <= Drift.settleTolerance
         pendingSpillLeft += spillLeft * columnSpacing
         pendingSpillRight += spillRight * columnSpacing
         return (spillLeft + spillRight) * columnSpacing
@@ -157,9 +201,11 @@ public final class Drift {
     /// One pass of thresholded diffusion. A column more than `limit` above the mean of its
     /// neighbours sheds part of the excess to them, half each; one more than `limit` below
     /// takes the same from them. Mass is conserved and heights stay within 0...maxHeight.
-    private func smooth(_ h: UnsafeMutableBufferPointer<Float>, limit: Float) {
+    /// Returns the largest amount moved out of or into one column.
+    private func smooth(_ h: UnsafeMutableBufferPointer<Float>, limit: Float) -> Float {
         let n = h.count
-        guard n >= 3 else { return }
+        guard n >= 3 else { return 0 }
+        var largest: Float = 0
         for i in 1..<(n - 1) {
             let mean = (h[i - 1] + h[i + 1]) * 0.5
             let excess = h[i] - mean
@@ -171,6 +217,7 @@ public final class Drift {
                 h[i] -= m
                 h[i - 1] += m * 0.5
                 h[i + 1] += m * 0.5
+                largest = max(largest, m)
             } else if excess < -limit {
                 var m = (-excess - limit) / 3
                 m = min(m, 2 * h[i - 1], 2 * h[i + 1], max(0, maxHeight - h[i]))
@@ -178,8 +225,10 @@ public final class Drift {
                 h[i] += m
                 h[i - 1] -= m * 0.5
                 h[i + 1] -= m * 0.5
+                largest = max(largest, m)
             }
         }
+        return largest
     }
 
     /// Removes snow covered by a circle (mitten). Snow below the circle stays. Returns removed pt².
@@ -204,6 +253,7 @@ public final class Drift {
             removed += h - remaining
             heights[i] = remaining
         }
+        if removed > 0 { touch() }
         return removed * columnSpacing
     }
 
@@ -223,6 +273,7 @@ public final class Drift {
             heights[i] -= dh
             removed += dh
         }
+        if removed > 0 { touch() }
         return removed * columnSpacing
     }
 
@@ -243,6 +294,7 @@ public final class Drift {
             heights[i] -= dh
             removed += dh
         }
+        if removed > 0 { touch() }
         return removed * columnSpacing
     }
 
@@ -299,6 +351,7 @@ public final class Drift {
             heights[i] -= dh
             removed += dh
         }
+        if removed > 0 { touch() }
         return removed * columnSpacing
     }
 
@@ -307,6 +360,7 @@ public final class Drift {
     public func clear() -> Float {
         let removed = totalSnow
         for i in heights.indices { heights[i] = 0 }
+        touch()
         pendingSpillLeft = 0
         pendingSpillRight = 0
         return removed
@@ -332,12 +386,15 @@ public final class Drift {
             resampled[j] = Drift.sample(oldHeights, spacing: oldSpacing, width: oldWidth, at: x)
         }
         heights = resampled
+        touch()
         return max(0, before - totalSnow)
     }
 
     private func add(_ dh: Float, at index: Int) -> Float {
         let accepted = min(dh, max(0, maxHeight - heights[index]))
+        guard accepted > 0 else { return 0 }
         heights[index] += accepted
+        touch()
         return accepted
     }
 
