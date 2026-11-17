@@ -10,7 +10,7 @@ import Foundation
 /// that reaches the bottom of the bounds bursts into debris flakes.
 extension SnowWorld {
     public static let minSnowballRadius: Float = 4
-    public static let maxSnowballRadius: Float = 28
+    public static let maxSnowballRadius: Float = 16
     /// Least snow height (pt) under the cursor needed to pack a new ball.
     public static let minSnowToRoll: Float = 2
     /// Live snowballs (any state) allowed at once. Past this `beginRoll` bursts the oldest
