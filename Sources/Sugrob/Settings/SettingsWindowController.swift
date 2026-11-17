@@ -100,7 +100,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     /// Shows the window in front of other apps. `message` is an optional hint line on top.
-    func show(message: String? = nil) {
+    /// With `activate` false Sugrob is not activated and the window does not take focus:
+    /// for windows that open on their own, not because the user asked.
+    func show(message: String? = nil, activate: Bool = true) {
         guard let window else { return }
         if let message {
             messageLabel.stringValue = message
@@ -112,12 +114,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         if !window.isVisible {
             window.center()
         }
-        if #available(macOS 14.0, *) {
-            NSApp.activate()
-        } else {
-            NSApp.activate(ignoringOtherApps: true)
+        if activate {
+            if #available(macOS 14.0, *) {
+                NSApp.activate()
+            } else {
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            window.makeKeyAndOrderFront(nil)
         }
-        window.makeKeyAndOrderFront(nil)
         // An accessory app may be refused activation; the window must still come up.
         window.orderFrontRegardless()
         startAccessibilityPolling()

@@ -63,8 +63,8 @@ final class FallbackControls {
         settingsWindow.window?.isVisible ?? false
     }
 
-    func showSettings(message: String? = nil) {
-        settingsWindow.show(message: message)
+    func showSettings(message: String? = nil, activate: Bool = true) {
+        settingsWindow.show(message: message, activate: activate)
     }
 
     /// Points at the Accessibility row of the settings window, which must be open.
@@ -78,7 +78,8 @@ final class FallbackControls {
             return
         }
         log.info("status item hidden (\(reason, privacy: .public)), showing settings")
-        showSettings(message: Self.hiddenStatusItemMessage)
+        // Opened on its own: stays behind the front app's focus.
+        showSettings(message: Self.hiddenStatusItemMessage, activate: false)
     }
 
     private func perform(_ action: HotKeys.Action) {

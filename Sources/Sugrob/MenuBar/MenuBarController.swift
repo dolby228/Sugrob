@@ -16,6 +16,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     var dockDiagnostics: (() -> [String: Any])?
 
     private var reportedHidden = false
+    /// Checks in a row that found the status item hidden.
+    private var hiddenStreak = 0
+    /// The item must look hidden this many checks in a row, `recheckInterval` apart,
+    /// before the settings window is opened in its place.
+    static let hiddenChecksRequired = 3
+    static let recheckInterval: TimeInterval = 2
     /// The popover of `showTransientMessage`.
     private var transientPopover: NSPopover?
     private var visibilityCheck: DispatchWorkItem?
@@ -63,6 +69,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil
         )
+        // Leaving a full-screen Space: a check skipped there can run now.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(activeSpaceChanged(_:)),
+            name: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil
+        )
     }
 
     // MARK: Visibility
@@ -84,26 +97,52 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         scheduleVisibilityCheck()
     }
 
+    @objc private func activeSpaceChanged(_ notification: Notification) {
+        guard !reportedHidden else { return }
+        scheduleVisibilityCheck()
+    }
+
     private func checkVisibility() {
+        visibilityCheck = nil
+        if let reason = unjudgeableReason() {
+            hiddenStreak = 0
+            log.debug("status item check skipped: \(reason, privacy: .public)")
+            return
+        }
         guard let reason = hiddenReason() else {
+            hiddenStreak = 0
             log.debug("status item visible")
             return
         }
-        log.notice("status item hidden: \(reason, privacy: .public)")
+        hiddenStreak += 1
+        log.notice("status item hidden (\(self.hiddenStreak)/\(Self.hiddenChecksRequired)): \(reason, privacy: .public)")
+        guard hiddenStreak >= Self.hiddenChecksRequired else {
+            scheduleVisibilityCheck(after: Self.recheckInterval)
+            return
+        }
         guard !reportedHidden else { return }
         reportedHidden = true
         onStatusItemHidden?(reason)
+    }
+
+    /// Non-nil when visibility cannot be judged right now: the menu bar is hidden
+    /// (auto-hide, a full-screen Space) or the item's window is on no screen (a sleeping
+    /// or disconnected display). Occlusion alone is no proof either: a hidden menu bar
+    /// and a sleeping display occlude the item too.
+    private func unjudgeableReason() -> String? {
+        if !NSMenu.menuBarVisible() { return "menu bar is hidden" }
+        if let window = statusItem.button?.window, window.screen == nil {
+            return "button window has no screen"
+        }
+        return nil
     }
 
     /// Nil when the status item looks visible, otherwise why it is not.
     func hiddenReason() -> String? {
         guard statusItem.isVisible else { return "isVisible is false" }
         guard let window = statusItem.button?.window else { return "no button window" }
-        if !window.occlusionState.contains(.visible) {
-            return "button window is occluded"
-        }
         let frame = window.frame
-        guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(frame) }) else {
+        guard let screen = window.screen ?? NSScreen.screens.first(where: { $0.frame.intersects(frame) }) else {
             return "button window \(frame) is off every screen"
         }
         guard screen.safeAreaInsets.top > 0,
@@ -388,6 +427,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             "hasButtonWindow": window != nil,
             "windowFrame": Diagnostics.rect(window?.frame),
             "occlusionVisible": window.map { $0.occlusionState.contains(.visible) } ?? false,
+            "menuBarVisible": NSMenu.menuBarVisible(),
             "screen": window?.screen?.localizedName ?? "",
             "hiddenReason": (hiddenReason() as Any?) ?? NSNull(),
         ]
