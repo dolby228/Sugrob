@@ -74,12 +74,16 @@ extension SnowWorld {
     }
 
     /// Moves whatever is on the shovel over to `other` (cursor crossed to another screen).
+    /// What does not fit on `other`'s shovel is dumped here where the blade was.
     public func transferShovelLoad(to other: SnowWorld) {
         guard other !== self, shovelLoad > 0 else { return }
         let moved = min(shovelLoad, other.shovelRoom)
         other.shovelLoad += moved
-        shovelLoad = 0
+        shovelLoad = max(0, shovelLoad - moved)
         other.shovelPosition = shovelPosition
+        if shovelLoad > 0.01, let point = shovelPosition {
+            dump(at: point, velocity: .zero)
+        }
         shovelPosition = nil
     }
 

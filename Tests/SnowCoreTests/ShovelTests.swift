@@ -144,6 +144,22 @@ final class ShovelTests: XCTestCase {
         XCTAssertEqual(b.shovelLoad, load)
     }
 
+    func testTransferKeepsWhatDoesNotFit() {
+        let a = world()
+        let b = SnowWorld(bounds: screen, seed: 4)
+        a.shovelLoad = 2000
+        a.shovelPosition = SIMD2(200, 100)
+        b.shovelLoad = 1500
+        a.transferShovelLoad(to: b)
+        XCTAssertEqual(b.shovelLoad, SnowWorld.shovelCapacity, accuracy: 1e-3)
+        XCTAssertEqual(a.shovelLoad, 0)
+        // The 1000 pt² that did not fit is dumped where the blade was, not lost.
+        XCTAssertEqual(a.clumps.count, 1)
+        XCTAssertEqual(a.clumps.first?.amount ?? 0, 1000, accuracy: 1e-3)
+        XCTAssertNil(a.shovelPosition)
+        XCTAssertEqual(b.shovelPosition, SIMD2(200, 100))
+    }
+
     func testDepositPileConservesAndPeaks() {
         let drift = Drift(width: 300)
         let accepted = drift.depositPile(atX: 150, amount: 1500)
