@@ -442,6 +442,55 @@ public final class SnowWorld {
         }
     }
 
+    /// How far around the mitten falling flakes are knocked, as a multiple of its radius.
+    static let flakePushReach: Float = 1.6
+    /// Share of the cursor velocity a flake right under the mitten picks up.
+    static let flakePushCarry: Float = 0.9
+    /// Extra outward kick (pt/s) at the mitten's center, so even a slow pass scatters flakes.
+    static let flakePushKick: Float = 140
+    /// A knocked flake never flies faster than this.
+    static let flakePushMaxSpeed: Float = 900
+
+    /// Mitten moving with `velocity` (pt/s) through the air from `from` to `to`: falling
+    /// flakes near that path are knocked along it and away from it, weaker towards the
+    /// edge, each once. Drag then slows them back to their normal fall. Returns how many
+    /// flakes were hit.
+    @discardableResult
+    public func pushFlakes(from: SIMD2<Float>, to: SIMD2<Float>, radius: Float, velocity: SIMD2<Float>) -> Int {
+        guard radius > 0, radius.isFinite,
+              from.x.isFinite, from.y.isFinite, to.x.isFinite, to.y.isFinite,
+              velocity.x.isFinite, velocity.y.isFinite else { return 0 }
+        let reach = radius * SnowWorld.flakePushReach
+        let reach2 = reach * reach
+        let segment = to - from
+        let length2 = segment.x * segment.x + segment.y * segment.y
+        let minX = min(from.x, to.x) - reach, maxX = max(from.x, to.x) + reach
+        let minY = min(from.y, to.y) - reach, maxY = max(from.y, to.y) + reach
+        let spinSign: Float = velocity.x >= 0 ? 1 : -1
+        var hit = 0
+        for i in flakes.indices {
+            var f = flakes[i]
+            let p = f.position
+            guard p.x >= minX, p.x <= maxX, p.y >= minY, p.y <= maxY else { continue }
+            let t: Float = length2 > 0 ? max(0, min(1, ((p - from) * segment).sum() / length2)) : 0
+            let offset = p - (from + segment * t)
+            let d2 = offset.x * offset.x + offset.y * offset.y
+            guard d2 < reach2 else { continue }
+            let d = d2.squareRoot()
+            let falloff = 1 - d / reach
+            let outward: SIMD2<Float> = d > 0.01 ? offset / d : SIMD2(0, -1)
+            f.velocity += (velocity * SnowWorld.flakePushCarry + outward * SnowWorld.flakePushKick) * falloff
+            let speed = (f.velocity.x * f.velocity.x + f.velocity.y * f.velocity.y).squareRoot()
+            if speed > SnowWorld.flakePushMaxSpeed {
+                f.velocity *= SnowWorld.flakePushMaxSpeed / speed
+            }
+            f.spin += spinSign * 6 * falloff
+            flakes[i] = f
+            hit += 1
+        }
+        return hit
+    }
+
     /// True if the part of the drift under `x` is hidden behind a window further front.
     private func isSweepCovered(_ entry: Entry, index: Int, near x: Float) -> Bool {
         let r = entry.rect

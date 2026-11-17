@@ -473,4 +473,37 @@ final class SnowWorldTests: XCTestCase {
         XCTAssertFalse(drift.isSettled)
         XCTAssertNotEqual(drift.revision, revision)
     }
+
+    func testMittenKnocksFallingFlakesAlongItsPath() {
+        let world = SnowWorld(bounds: screen, seed: 3)
+        world.particleBudgetScale = 0
+        world.emitDebris(at: SIMD2(400, 100), velocity: SIMD2(0, 60), size: 3, ignoring: nil)
+        world.emitDebris(at: SIMD2(400, 400), velocity: SIMD2(0, 60), size: 3, ignoring: nil)
+        let hit = world.pushFlakes(from: SIMD2(380, 104), to: SIMD2(420, 104), radius: 18, velocity: SIMD2(800, 0))
+        XCTAssertEqual(hit, 1)
+        let near = world.flakes.first { $0.position.y < 200 }!
+        let far = world.flakes.first { $0.position.y > 200 }!
+        XCTAssertGreaterThan(near.velocity.x, 300, "knocked along the swipe")
+        XCTAssertLessThan(near.velocity.y, 60, "knocked up, away from the path below it")
+        XCTAssertEqual(far.velocity, SIMD2(0, 60), "flakes away from the path are untouched")
+        XCTAssertLessThanOrEqual((near.velocity * near.velocity).sum().squareRoot(), SnowWorld.flakePushMaxSpeed + 0.01)
+
+        // Drag brings a knocked flake back to its normal fall.
+        let before = near.position
+        run(world, steps: 120)
+        if let after = world.flakes.first(where: { $0.position.y < 300 }) {
+            XCTAssertGreaterThan(after.position.x, before.x + 50)
+            XCTAssertGreaterThan(after.velocity.y, 0)
+            XCTAssertLessThan(abs(after.velocity.x), 100)
+        }
+    }
+
+    func testMittenPushIgnoresInvalidInput() {
+        let world = SnowWorld(bounds: screen, seed: 3)
+        world.particleBudgetScale = 0
+        world.emitDebris(at: SIMD2(400, 100), velocity: SIMD2(0, 60), size: 3, ignoring: nil)
+        XCTAssertEqual(world.pushFlakes(from: SIMD2(400, 100), to: SIMD2(400, 100), radius: 0, velocity: SIMD2(500, 0)), 0)
+        XCTAssertEqual(world.pushFlakes(from: SIMD2(.nan, 100), to: SIMD2(400, 100), radius: 18, velocity: SIMD2(500, 0)), 0)
+        XCTAssertEqual(world.flakes[0].velocity, SIMD2(0, 60))
+    }
 }
