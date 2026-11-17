@@ -39,6 +39,16 @@ final class OverlayController: NSObject {
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil
         )
+        // The overlays have `canHide = false`; still re-front them after a hide/unhide of
+        // Sugrob (⌥-click elsewhere, ⌘H) in case the system reordered them.
+        for name in [NSApplication.didHideNotification, NSApplication.didUnhideNotification] {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(appHiddenStateDidChange(_:)),
+                name: name,
+                object: nil
+            )
+        }
         syncWindows()
     }
 
@@ -50,6 +60,8 @@ final class OverlayController: NSObject {
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil
         )
+        NotificationCenter.default.removeObserver(self, name: NSApplication.didHideNotification, object: nil)
+        NotificationCenter.default.removeObserver(self, name: NSApplication.didUnhideNotification, object: nil)
         for entry in entries.values {
             entry.window.orderOut(nil)
             entry.window.close()
@@ -94,6 +106,13 @@ final class OverlayController: NSObject {
     private func applyMouseCapture() {
         for (id, entry) in entries {
             entry.window.ignoresMouseEvents = id != captureDisplay
+        }
+    }
+
+    @objc private func appHiddenStateDidChange(_ notification: Notification) {
+        log.info("app \(notification.name.rawValue, privacy: .public), keeping overlays in front")
+        for entry in entries.values {
+            entry.window.orderFrontRegardless()
         }
     }
 
