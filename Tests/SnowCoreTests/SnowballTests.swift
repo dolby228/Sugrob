@@ -237,6 +237,47 @@ final class SnowballTests: XCTestCase {
         XCTAssertTrue(burst, "balls break into debris at the bottom")
     }
 
+    func testMittenSwipeThereAndBackKnocksSnowmanOver() {
+        let world = worldWithSnowman()
+        let man = world.snowmen[0]
+        let y = man.middleCenter.y
+        let left = SIMD2<Float>(man.position.x - 40, y), right = SIMD2<Float>(man.position.x + 40, y)
+
+        // One pass, however fast, leaves it standing.
+        XCTAssertEqual(world.knockSnowmen(from: left, to: right, radius: 18, velocity: SIMD2(900, 0)), 0)
+        XCTAssertEqual(world.knockSnowmen(from: left, to: right, radius: 18, velocity: SIMD2(900, 0)), 0)
+        XCTAssertEqual(world.snowmen.count, 1)
+
+        // The swipe back knocks it over; its balls fall that way.
+        XCTAssertEqual(world.knockSnowmen(from: right, to: left, radius: 18, velocity: SIMD2(-600, 0)), 1)
+        XCTAssertTrue(world.snowmen.isEmpty)
+        XCTAssertEqual(world.snowballs.count, 3)
+        XCTAssertTrue(world.snowballs.allSatisfy { $0.state == .falling })
+        XCTAssertLessThan(world.snowballs.map { $0.velocity.x }.reduce(0, +), 0)
+    }
+
+    func testSlowOrDistantOrStaleSwipesLeaveSnowman() {
+        let world = worldWithSnowman()
+        let man = world.snowmen[0]
+        let y = man.middleCenter.y
+        let left = SIMD2<Float>(man.position.x - 40, y), right = SIMD2<Float>(man.position.x + 40, y)
+
+        // Too slow.
+        world.knockSnowmen(from: left, to: right, radius: 18, velocity: SIMD2(100, 0))
+        world.knockSnowmen(from: right, to: left, radius: 18, velocity: SIMD2(-100, 0))
+        // Too far above it.
+        let high = SIMD2<Float>(0, man.headCenter.y - man.headRadius - 40)
+        world.knockSnowmen(from: left + high - SIMD2(0, y), to: right + high - SIMD2(0, y), radius: 18, velocity: SIMD2(800, 0))
+        world.knockSnowmen(from: right + high - SIMD2(0, y), to: left + high - SIMD2(0, y), radius: 18, velocity: SIMD2(-800, 0))
+        XCTAssertEqual(world.snowmen.count, 1)
+
+        // Back too late.
+        world.knockSnowmen(from: left, to: right, radius: 18, velocity: SIMD2(800, 0))
+        run(world, steps: 120)
+        XCTAssertEqual(world.knockSnowmen(from: right, to: left, radius: 18, velocity: SIMD2(-800, 0)), 0)
+        XCTAssertEqual(world.snowmen.count, 1)
+    }
+
     func testMissingSurfaceKeepsRestingBallUntilItReturns() {
         let world = snowyWorld()
         let id = rollAndDrop(world, from: 200)

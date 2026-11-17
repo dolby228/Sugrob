@@ -46,6 +46,8 @@ public final class SnowWorld {
     /// Where the shovel blade is drawn; nil hides it. Set by the input layer.
     public var shovelPosition: SIMD2<Float>?
     var nextObjectID = 1
+    /// Last mitten hit on each snowman: world time and horizontal direction (±1).
+    var snowmanHits: [Int: (time: Float, direction: Float)] = [:]
 
     struct Entry {
         let id: Int
@@ -529,6 +531,7 @@ public final class SnowWorld {
         flakes.removeAll(keepingCapacity: true)
         snowballs.removeAll()
         snowmen.removeAll()
+        snowmanHits.removeAll()
         clumps.removeAll()
         shovelLoad = 0
         spawnAccumulator = 0
