@@ -9,7 +9,8 @@ private let log = Logger(subsystem: "dev.sugrob", category: "app")
 /// «Скопировать диагностику»: a JSON report for bug reports.
 ///
 /// Contains screens, on-screen window bounds (owner, pid, layer, bounds, alpha; never
-/// window titles), the Accessibility trust flag, how the Dock was located (source,
+/// window titles), the Accessibility trust flag, whether the grant looks stale (another
+/// build's cdhash was trusted), how the Dock was located (source,
 /// AX frames, estimate inputs), settings, the status item frame and which screens
 /// have their snow hidden behind a full-screen system panel.
 @MainActor
@@ -32,6 +33,10 @@ enum Diagnostics {
             "bundlePath": Bundle.main.bundlePath,
             "macOS": ProcessInfo.processInfo.operatingSystemVersionString,
             "axIsProcessTrusted": AXIsProcessTrusted(),
+            "accessibilityLooksStale": AccessibilityAccess.looksStale,
+            "accessibilityResetFailed": AccessibilityAccess.resetFailed,
+            "codeIdentity": orNull(AccessibilityAccess.codeIdentity),
+            "grantedCodeIdentity": orNull(AccessibilityAccess.grantedCodeIdentity),
             "screens": NSScreen.screens.enumerated().map { screenInfo(index: $0.offset, screen: $0.element) },
             "windows": windowInfo(),
             "coveredScreens": coveredScreens(),
