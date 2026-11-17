@@ -260,6 +260,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         debugItem.toolTip = forced ? "Включено через SUGROB_DEBUG_WINDOWS=1" : nil
 
         loginItem.state = LaunchAtLogin.isEnabled ? .on : .off
+        loginItem.toolTip = LaunchAtLogin.hint
 
         let trusted = AccessibilityAccess.refresh()
         accessibilityItem.state = trusted ? .on : .off
